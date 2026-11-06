@@ -134,17 +134,40 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
             t.dim(),
         ),
     ]);
-    let chart_rows = (d.buckets.len() as u16).clamp(1, (area.height / 3).max(3));
+    let not_root = |r: &&PathDelta| r.path != d.root;
+    let grown: Vec<PathDelta> = d.grown.iter().filter(not_root).cloned().collect();
+    let shrunk: Vec<PathDelta> = d.shrunk.iter().filter(not_root).cloned().collect();
+    let side_by_side = area.width >= 110;
+    let list_rows = if side_by_side {
+        grown.len().max(shrunk.len()) as u16 + 1
+    } else {
+        (grown.len() + shrunk.len()) as u16 + 2
+    }
+    .max(3);
     let history_h = if area.height >= 30 {
         (s.scans.len() as u16 + 2).clamp(4, 10)
     } else {
         0
     };
-    let [head, chart, lists, history] = Layout::vertical([
+    let buckets = (d.buckets.len() as u16).max(1);
+    let spare = area
+        .height
+        .saturating_sub(2 + buckets + 2 + list_rows + history_h);
+    // Thicker bars when the terminal has room, so a short diff still fills it.
+    let bar_h: u16 = if spare >= buckets * 2 {
+        3
+    } else if spare >= buckets {
+        2
+    } else {
+        1
+    };
+    let chart_rows = (buckets * bar_h).min((area.height / 2).max(3));
+    let [head, chart, lists, history, _] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Length(chart_rows + 2),
-        Constraint::Min(3),
+        Constraint::Min(list_rows.min(area.height / 3).max(3)),
         Constraint::Length(history_h),
+        Constraint::Fill(1),
     ])
     .areas(area);
     if history_h > 0 {
@@ -173,7 +196,11 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
     if d.buckets.is_empty() {
         lines.push(Line::styled("No bucket moved by more than 1 MB.", t.dim()));
     }
-    for b in d.buckets.iter().take(inner.height as usize) {
+    for b in d
+        .buckets
+        .iter()
+        .take((inner.height / bar_h).max(1) as usize)
+    {
         let colour = t.bucket_rgb(&b.colour);
         let mut spans = vec![
             Span::styled(
@@ -185,20 +212,25 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
                 Style::new().fg(if b.delta > 0 { grow } else { shrink }),
             ),
         ];
-        spans.extend(
-            widgets::bar(Bar {
-                frac: b.delta.unsigned_abs() as f64 / max as f64,
-                width: bar_w,
-                colour,
-                theme: t,
-            })
-            .spans,
-        );
+        let bar = widgets::bar(Bar {
+            frac: b.delta.unsigned_abs() as f64 / max as f64,
+            width: bar_w,
+            colour,
+            theme: t,
+        });
+        spans.extend(bar.spans.clone());
         lines.push(Line::from(spans));
+        if bar_h >= 2 {
+            let mut pad = vec![Span::raw(" ".repeat(label_w + num_w + 2))];
+            pad.extend(bar.spans.clone());
+            lines.push(Line::from(pad));
+        }
+        if bar_h == 3 {
+            lines.push(Line::default());
+        }
     }
     frame.render_widget(Paragraph::new(lines), inner);
 
-    let side_by_side = lists.width >= 110;
     let (a, b) = if side_by_side {
         let [a, b] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(lists);
@@ -208,9 +240,6 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
             Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(lists);
         (a, b)
     };
-    let not_root = |r: &&PathDelta| r.path != d.root;
-    let grown: Vec<PathDelta> = d.grown.iter().filter(not_root).cloned().collect();
-    let shrunk: Vec<PathDelta> = d.shrunk.iter().filter(not_root).cloned().collect();
     path_list(frame, a, "Grew", &grown, s.scroll, grow, ctx, t);
     path_list(frame, b, "Shrank", &shrunk, s.scroll, shrink, ctx, t);
 }

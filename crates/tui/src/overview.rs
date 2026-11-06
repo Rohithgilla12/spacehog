@@ -193,10 +193,10 @@ pub fn render(
     .areas(area);
     render_hero(frame, hero, s, f, tall);
     render_safety_bar(frame, safety, s, f);
-    let left_w = if main.width >= 140 {
-        main.width * 2 / 5
-    } else {
-        38
+    let left_w = match main.width {
+        w if w >= 140 => w * 2 / 5,
+        w if w >= 100 => 38,
+        _ => 30,
     };
     let [left, right] =
         Layout::horizontal([Constraint::Length(left_w), Constraint::Min(30)]).areas(main);
@@ -238,7 +238,7 @@ fn render_hero(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env, tall: 
         SizeMode::Disk => "on disk in",
         SizeMode::Apparent => "apparent size in",
     };
-    let fig_w = if tall { 4 * 9 } else { 24 };
+    let fig_w = if tall { 4 * 9 } else { 28 };
     let [a, b, c] = Layout::horizontal([
         Constraint::Length(fig_w + 2),
         Constraint::Length(fig_w + 2),
@@ -575,7 +575,11 @@ fn render_top(
         .unwrap_or(1)
         .max(1);
     let w = inner.width as usize;
-    let bar_w = (w * 22 / 100).clamp(8, 36);
+    let bar_w = if w < 60 {
+        (w * 15 / 100).max(4)
+    } else {
+        (w * 22 / 100).clamp(8, 36)
+    };
     let label_w = if w >= 100 { 16 } else { 0 };
     let fixed = 2 + bar_w + 10 + 6 + 2 + label_w + 1;
     let path_w = w.saturating_sub(fixed).max(8);
