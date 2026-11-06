@@ -18,6 +18,8 @@ use rmcp::{
 use serde::Serialize;
 use serde_json::json;
 use spacehog_core::categorise::Categoriser;
+use spacehog_core::changes::{self, Changes, Since};
+use spacehog_core::cleanup::{ExecuteRequest, ExecutionReport, ItemResult, Trash};
 use spacehog_core::config::Config;
 use spacehog_core::engine::{ScanJob, ScanRequest, spawn_scan};
 use spacehog_core::model::{NodeKind, ScanId, ScanRecord, ScanStatus};
@@ -28,8 +30,8 @@ use spacehog_core::rules::{RuleSet, Safety};
 use spacehog_core::{Error as CoreError, Index, Result as CoreResult, human, paths, status};
 
 use crate::args::{
-    ExplainArgs, FreeSpaceArgs, ListProposalsArgs, ProposeArgs, QueryArgs, ScanArgs, SummaryArgs,
-    TopArgs,
+    ChangesArgs, ExecuteArgs, ExplainArgs, FreeSpaceArgs, ListProposalsArgs, ProposeArgs,
+    QueryArgs, ScanArgs, SummaryArgs, TopArgs, UndoArgs,
 };
 
 const INSTRUCTIONS: &str = "\
@@ -40,10 +42,11 @@ Start with `status`. If there is no recent scan, call `scan` and poll `status` u
 Use `summary` and `top` to find candidates, preferring regenerable and cache items and stale ones \
 first. Call `explain` on every path before you propose it, and always for `review` items.
 
-You cannot delete anything. `propose_cleanup` records a proposal; a human approves it in the \
-spacehog TUI or with `spacehog proposals approve <id>`, so tell the user the proposal id and ask \
-them to approve it. Execution needs that approval unless the user has listed every item's safety \
-class in `mcp.auto_approve`; `requires_approval` in the result says which applies.
+`propose_cleanup` records a proposal; a human approves it in the spacehog TUI or with \
+`spacehog proposals approve <id>`, so tell the user the proposal id and total and ask them to \
+approve it. `execute_cleanup` then runs it, and only an approved proposal runs unless the user has \
+listed every item's safety class in `mcp.auto_approve`; `requires_approval` in the propose result \
+says which applies. Items go to the Trash by default and `undo` puts them back.
 
 Sizes are bytes with a human-readable string beside them. Paths are absolute.";
 
@@ -253,11 +256,72 @@ impl State {
         })
     }
 
+    fn execute(&self, args: ExecuteArgs) -> CoreResult<ExecutionReport> {
+        self.index()?.execute(
+            &self.rules,
+            &self.config,
+            &Trash::platform_default(),
+            &ExecuteRequest {
+                proposal_id: &args.proposal_id,
+                confirm: &args.confirm,
+                actor: Actor::Agent,
+            },
+        )
+    }
+
+    fn undo(&self, args: UndoArgs) -> CoreResult<UndoView> {
+        Ok(UndoView {
+            journal_id: args.journal_id.clone(),
+            items: self.index()?.undo(&args.journal_id)?,
+        })
+    }
+
+    fn changes(&self, args: ChangesArgs) -> CoreResult<Changes> {
+        let since = match args.since.as_deref().map(str::trim) {
+            None | Some("") => Since::Previous,
+            Some(s) if s.chars().all(|c| c.is_ascii_digit()) => Since::Scan(
+                s.parse()
+                    .map_err(|_| CoreError::Invalid(format!("bad scan id {s}")))?,
+            ),
+            Some(s) => Since::Ago(parse_duration_days(s)? * 86_400),
+        };
+        changes::changes(
+            &self.index()?,
+            &self.rules,
+            None,
+            since,
+            args.limit.unwrap_or(30),
+        )
+    }
+
     fn rule_set(&self) -> RuleList<'_> {
         RuleList {
             buckets: &self.rules.buckets,
             rules: self.rules.rules.iter().map(|r| &r.def).collect(),
         }
+    }
+}
+
+#[derive(Serialize)]
+struct UndoView {
+    journal_id: String,
+    items: Vec<ItemResult>,
+}
+
+fn parse_duration_days(s: &str) -> CoreResult<i64> {
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: i64 = num
+        .parse()
+        .map_err(|_| CoreError::Invalid(format!("expected a duration like 7d, got {s}")))?;
+    match unit {
+        "" | "d" => Ok(n),
+        "w" => Ok(n * 7),
+        "m" | "mo" => Ok(n * 30),
+        "y" => Ok(n * 365),
+        _ => Err(CoreError::Invalid(format!(
+            "unknown unit {unit}; use d, w, m, or y"
+        ))),
     }
 }
 
@@ -538,6 +602,55 @@ impl Spacehog {
         let client = peer.peer_info().map(|i| i.client_info.name.clone());
         self.run("propose_cleanup", move |s| s.propose(args, client))
             .await
+    }
+
+    #[tool(
+        description = "Execute a cleanup proposal. Works only when a human approved it in the \
+                       spacehog TUI or with `spacehog proposals approve`, or when every item's \
+                       safety class is in the user's `mcp.auto_approve` and the mode is trash. \
+                       Permanent deletes always need human approval. `confirm` must equal the \
+                       proposal's `total_human`. Every item is re-checked against the disk first \
+                       and skipped if it changed. Returns per-item outcomes and a `journal_id` \
+                       for `undo`.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
+    )]
+    async fn execute_cleanup(
+        &self,
+        Parameters(args): Parameters<ExecuteArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run("execute_cleanup", move |s| s.execute(args)).await
+    }
+
+    #[tool(
+        description = "Put back everything an `execute_cleanup` moved to the Trash, using the \
+                       `journal_id` it returned. Permanently deleted items cannot be restored.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true
+        )
+    )]
+    async fn undo(
+        &self,
+        Parameters(args): Parameters<UndoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run("undo", move |s| s.undo(args)).await
+    }
+
+    #[tool(
+        description = "What grew or shrank between two scans of the same root: the change per \
+                       bucket and the paths that explain it. Needs at least two kept scans.",
+        annotations(read_only_hint = true)
+    )]
+    async fn changes(
+        &self,
+        Parameters(args): Parameters<ChangesArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run("changes", move |s| s.changes(args)).await
     }
 
     #[tool(

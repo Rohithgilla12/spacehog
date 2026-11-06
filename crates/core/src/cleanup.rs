@@ -24,7 +24,11 @@ pub enum Trash {
 }
 
 impl Trash {
+    /// `SPACEHOG_TRASH_DIR` redirects trashing to a directory, for tests.
     pub fn platform_default() -> Self {
+        if let Some(dir) = std::env::var_os("SPACEHOG_TRASH_DIR").filter(|v| !v.is_empty()) {
+            return Trash::Rename(dir.into());
+        }
         if cfg!(target_os = "macos") {
             Trash::Rename(crate::paths::home_dir().join(".Trash"))
         } else {

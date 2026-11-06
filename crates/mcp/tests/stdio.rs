@@ -36,13 +36,14 @@ struct Session {
 }
 
 impl Session {
-    fn spawn(home: &Path, data: &Path, logs: &Path, config: &Path) -> Self {
+    fn spawn(home: &Path, data: &Path, logs: &Path, config: &Path, trash: &Path) -> Self {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .env(CHILD, "1")
             .env("HOME", home)
             .env("SPACEHOG_DATA_DIR", data)
             .env("SPACEHOG_STATE_DIR", logs)
             .env("SPACEHOG_CONFIG_DIR", config)
+            .env("SPACEHOG_TRASH_DIR", trash)
             .env_remove("SPACEHOG_DB")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -142,11 +143,12 @@ fn stdio_session() {
     let data = tempfile::tempdir().unwrap();
     let logs = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
+    let trash = tempfile::tempdir().unwrap();
     drop(common::scan(&home, data.path()));
     let stale = home.join("code/old/node_modules");
     let essay = home.join("Documents/essay.txt");
 
-    let mut s = Session::spawn(&home, data.path(), logs.path(), config.path());
+    let mut s = Session::spawn(&home, data.path(), logs.path(), config.path(), trash.path());
 
     let init = s.request(
         "initialize",
@@ -176,6 +178,8 @@ fn stdio_session() {
     assert_eq!(
         names,
         [
+            "changes",
+            "execute_cleanup",
             "explain",
             "list_proposals",
             "propose_cleanup",
@@ -184,7 +188,8 @@ fn stdio_session() {
             "scan",
             "status",
             "summary",
-            "top"
+            "top",
+            "undo"
         ]
     );
 
@@ -231,10 +236,50 @@ fn stdio_session() {
     assert_eq!(pending["proposals"][0]["id"], proposal_id.as_str());
     assert_eq!(pending["proposals"][0]["agent"], CLIENT);
 
+    let total = proposed["total_human"].as_str().unwrap().to_string();
+    let unapproved = s.call_raw(
+        "execute_cleanup",
+        json!({ "proposal_id": proposal_id, "confirm": total }),
+    );
+    assert_eq!(unapproved["structuredContent"]["error"], "refused");
+    let why = unapproved["structuredContent"]["message"].as_str().unwrap();
+    assert!(why.contains("pending approval"), "{why}");
+    assert!(stale.exists(), "nothing runs before a human approves");
+
+    spacehog_core::Index::open(&data.path().join("index.db"))
+        .unwrap()
+        .approve(&proposal_id)
+        .unwrap();
+    let careless = s.call_raw(
+        "execute_cleanup",
+        json!({ "proposal_id": proposal_id, "confirm": "yes" }),
+    );
+    assert_eq!(careless["structuredContent"]["error"], "refused");
+
+    let executed = s.call(
+        "execute_cleanup",
+        json!({ "proposal_id": proposal_id, "confirm": total }),
+    );
+    assert_eq!(executed["status"], "executed");
+    assert_eq!(executed["results"][0]["outcome"], "trashed");
+    assert!(!stale.exists());
+    assert!(
+        trash.path().join("node_modules").exists(),
+        "landed in the trash dir"
+    );
+    let journal_id = executed["journal_id"].as_str().unwrap().to_string();
+
+    let undone = s.call("undo", json!({ "journal_id": journal_id }));
+    assert_eq!(undone["items"][0]["outcome"], "restored");
+    assert!(stale.join("x/index.js").exists(), "undo puts it back");
+
     let resource = s.request("resources/read", json!({ "uri": "spacehog://proposals" }));
     let body: Value =
         serde_json::from_str(resource["contents"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(body["proposals"][0]["id"], proposal_id.as_str());
+    assert!(
+        body["proposals"].as_array().unwrap().is_empty(),
+        "the executed proposal is no longer pending: {body}"
+    );
 
     let prompt = s.request(
         "prompts/get",
@@ -261,6 +306,11 @@ fn stdio_session() {
     assert!(!scanned["summary"]["buckets"].as_array().unwrap().is_empty());
     let after = s.call("status", json!({}));
     assert_eq!(after["last_scan"]["id"], scanned["scan_id"]);
+    let changed = s.call("changes", json!({ "since": null }));
+    assert_eq!(changed["to"]["id"], scanned["scan_id"]);
+    assert!(changed["buckets"].is_array());
+    let bad = s.call_raw("changes", json!({ "since": "7 fortnights" }));
+    assert_eq!(bad["structuredContent"]["error"], "invalid_params");
 
     s.close();
     let log = std::fs::read_to_string(logs.path().join("mcp.log")).unwrap();

@@ -19,6 +19,8 @@
 
 ### M4 MCP server
 
+- M5/M6 additions: `execute_cleanup` (approved proposals only, or trash proposals fully covered by `mcp.auto_approve`; `confirm` must equal the total), `undo`, and `changes`.
+
 - `spacehog mcp` serves `status`, `scan`, `summary`, `top`, `query`, `explain`, `propose_cleanup`, `list_proposals`, and `rules` over stdio, with `spacehog://summary` and `spacehog://proposals` resources and a `free-space` prompt.
 - Agents can only propose. Proposals record the client's name and wait for a human to approve them unless `mcp.auto_approve` covers every item.
 - Caller-fixable failures come back as tool errors the agent can read; logs go to `~/.local/state/spacehog/mcp.log`, never stdout.

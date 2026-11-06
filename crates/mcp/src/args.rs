@@ -168,3 +168,30 @@ mod tests {
         parses_as::<ProposalStatus>(&values::<StatusSchema>());
     }
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteArgs {
+    /// The id `propose_cleanup` returned.
+    pub proposal_id: String,
+    /// Must equal the proposal's `total_human` exactly, e.g. "28.4 GB". This
+    /// proves you read the proposal you are executing.
+    pub confirm: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UndoArgs {
+    /// The `journal_id` an `execute_cleanup` result returned.
+    pub journal_id: String,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangesArgs {
+    /// A duration such as "7d", "2w", or "1m", or a scan id as a string. Defaults to the
+    /// previous scan of the same root.
+    pub since: Option<String>,
+    /// Paths to return per direction (grown and shrunk). Defaults to 30.
+    pub limit: Option<usize>,
+}
