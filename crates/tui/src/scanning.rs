@@ -275,8 +275,14 @@ pub fn render_screen(frame: &mut Frame, area: Rect, task: &ScanTask, ctx: &Ctx, 
     }
     let max = task.top[0].disk.max(1);
     let w = inner.width as usize;
-    let bar_w = (w * 45 / 100).clamp(8, 80);
-    let name_w = w.saturating_sub(bar_w + 10 + 16 + 2).max(8);
+    let longest = task
+        .top
+        .iter()
+        .map(|d| d.name.chars().count())
+        .max()
+        .unwrap_or(8);
+    let name_w = longest.clamp(8, 40).min(w / 3);
+    let bar_w = w.saturating_sub(name_w + 10 + 16 + 2).max(4);
     let lines: Vec<Line> = task
         .top
         .iter()

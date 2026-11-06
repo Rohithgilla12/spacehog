@@ -18,6 +18,7 @@ use spacehog_core::proposals::{
 };
 use spacehog_core::report::Item;
 use spacehog_core::rules::{RuleSet, Safety};
+use tui_big_text::{BigText, PixelSize};
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 
@@ -1429,9 +1430,12 @@ fn render_run(frame: &mut Frame, area: Rect, s: &CleanupState, env: &Env) {
         };
     let total = ready.entries.len();
     let finished = streamed.len();
-    let [head, counter_area, gauge, list, foot] = Layout::vertical([
+    let big_h = if area.height >= 20 { 4 } else { 0 };
+    let [head, big, counter_area, gauge, _, list, foot] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(big_h),
+        Constraint::Length(1),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(2),
@@ -1442,30 +1446,34 @@ fn render_run(frame: &mut Frame, area: Rect, s: &CleanupState, env: &Env) {
         (false, DeleteMode::Permanent) => "Deleting permanently",
         (true, _) => "Cleanup finished",
     };
+    let whose = match ready.target {
+        Target::Queue => format!("· your queue · {}", ready.id),
+        Target::Proposal(_) => format!("· {}'s proposal {}", ready.agent, ready.id),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {verb} "), t.title()),
-            Span::styled(
-                format!(
-                    "· {}'s proposal {} · {}",
-                    ready.agent, ready.id, ready.total_human
-                ),
-                t.dim(),
-            ),
+            Span::styled(whose, t.dim()),
         ])),
         head,
     );
+    let freed = human::bytes(counter.shown);
+    let green = Style::new().fg(t.good()).add_modifier(Modifier::BOLD);
+    if big_h > 0 {
+        frame.render_widget(
+            BigText::builder()
+                .pixel_size(PixelSize::Quadrant)
+                .style(green)
+                .lines(vec![freed.clone().into()])
+                .build(),
+            big.inner(ratatui::layout::Margin::new(1, 0)),
+        );
+    }
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(" freed ", t.dim()),
-                Span::styled(
-                    human::bytes(counter.shown),
-                    Style::new().fg(t.good()).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::default(),
-        ]),
+        Paragraph::new(Line::from(vec![
+            Span::styled(format!(" {freed} freed"), green),
+            Span::styled(format!(" of {}", ready.total_human), t.dim()),
+        ])),
         counter_area,
     );
     let ratio = if total == 0 {
@@ -1533,7 +1541,15 @@ fn render_run(frame: &mut Frame, area: Rect, s: &CleanupState, env: &Env) {
             ),
         ]));
     }
-    frame.render_widget(Paragraph::new(lines), list);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::new()
+                .borders(Borders::TOP)
+                .border_style(t.border())
+                .title(Span::styled(" Items ", t.title())),
+        ),
+        list,
+    );
 
     let foot_lines = match done {
         None => vec![Line::styled(" working…", t.dim())],

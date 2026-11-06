@@ -118,12 +118,15 @@ pub fn stacked(buf: &mut Buffer, area: Rect, segs: &[Segment], t: &Theme) {
         }
         if area.height > 1 && width >= 6 {
             let pct = s.bytes as f64 / total as f64 * 100.0;
-            let label = format!("{} {:.0}%", s.label, pct);
-            let label = if label.chars().count() as u16 > width {
-                format!("{pct:.0}%")
-            } else {
-                label
-            };
+            let short: Vec<&str> = s.label.split_whitespace().take(2).collect();
+            let label = [
+                format!("{} {pct:.0}%", s.label),
+                format!("{} {pct:.0}%", short.join(" ")),
+                format!("{pct:.0}%"),
+            ]
+            .into_iter()
+            .find(|l| (l.chars().count() as u16) < width)
+            .unwrap_or_default();
             buf.set_stringn(
                 x0,
                 area.y + 1,
@@ -138,7 +141,7 @@ pub fn stacked(buf: &mut Buffer, area: Rect, segs: &[Segment], t: &Theme) {
     }
 }
 
-/// A filled area chart: one column per sample, eighth-block tops, the
+/// A filled area chart with eighth-block tops and a bright crest, the
 /// latest samples at the right edge.
 pub fn area_chart(buf: &mut Buffer, area: Rect, samples: &[u64], colour: Rgb, t: &Theme) {
     if area.width == 0 || area.height == 0 {
@@ -146,14 +149,20 @@ pub fn area_chart(buf: &mut Buffer, area: Rect, samples: &[u64], colour: Rgb, t:
     }
     let n = usize::from(area.width);
     let shown = &samples[samples.len().saturating_sub(n)..];
+    if shown.is_empty() {
+        return;
+    }
     let max = shown.iter().copied().max().unwrap_or(0).max(1);
     let levels = f64::from(area.height) * 8.0;
-    let offset = n - shown.len();
     let fg = t.rgb(colour);
     let fade = t.rgb(theme::scale(colour, 0.55));
-    for (i, v) in shown.iter().enumerate() {
-        let x = area.x + (offset + i) as u16;
-        let filled = ((*v as f64 / max as f64) * levels).round() as u16;
+    for col in 0..n {
+        // Until there are more samples than columns, each sample is stretched
+        // across several columns so the chart always spans the full width.
+        let v = shown[col * shown.len() / n];
+        let x = area.x + col as u16;
+        let filled = ((v as f64 / max as f64) * levels).round() as u16;
+        let top_row = filled.div_ceil(8);
         for row in 0..area.height {
             let from_bottom = area.height - 1 - row;
             let here = filled.saturating_sub(from_bottom * 8).min(8);
@@ -164,11 +173,7 @@ pub fn area_chart(buf: &mut Buffer, area: Rect, samples: &[u64], colour: Rgb, t:
             };
             let cell = &mut buf[(x, area.y + row)];
             cell.set_symbol(sym);
-            let c = if from_bottom == 0 || here < 8 {
-                fg
-            } else {
-                fade
-            };
+            let c = if from_bottom + 1 == top_row { fg } else { fade };
             cell.set_style(Style::new().fg(if t.mono() { Color::Reset } else { c }));
         }
     }

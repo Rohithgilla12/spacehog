@@ -301,7 +301,7 @@ fn pixel(t: &Tile, tops: &[Rect], x: u16, y: u16, p: &Paint) -> Rgb {
     }
     let r = t.rect;
     if x + 1 == r.right() || y + 1 == r.bottom() {
-        return theme::scale(t.rgb, 0.3);
+        return shade(p, t.rgb, 0.3);
     }
     let k = match (t.header, lit || hot) {
         (true, false) => 0.42,
@@ -309,7 +309,21 @@ fn pixel(t: &Tile, tops: &[Rect], x: u16, y: u16, p: &Paint) -> Rgb {
         (false, false) => 0.68,
         (false, true) => 0.95,
     };
-    theme::scale(t.rgb, k)
+    shade(p, t.rgb, k)
+}
+
+/// Quieter tiles are darker on the dark page and paler on the light one,
+/// so depth and hover read the right way round in both themes.
+fn shade(p: &Paint, rgb: Rgb, k: f32) -> Rgb {
+    match p.theme.tone {
+        theme::Tone::Light => {
+            let (r, g, b) = rgb;
+            let w = (1.0 - k) * 0.85;
+            let m = |v: u8| (f32::from(v) + (255.0 - f32::from(v)) * w) as u8;
+            (m(r), m(g), m(b))
+        }
+        _ => theme::scale(rgb, k),
+    }
 }
 
 /// The fill a label sits on, matching `pixel` for the label's cell.
@@ -321,7 +335,7 @@ fn label_bg(t: &Tile, p: &Paint) -> Rgb {
         (false, false) => 0.68,
         (false, true) => 0.95,
     };
-    theme::scale(t.rgb, k)
+    shade(p, t.rgb, k)
 }
 
 /// The cells fully inside a tile, excluding its right and bottom edge pixels.

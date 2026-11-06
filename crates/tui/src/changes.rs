@@ -126,17 +126,30 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("   [ ] baseline ({} of {} kept)", s.base, s.scans.len() - 1),
+            format!(
+                "   [ ] older / newer baseline · {} of {} earlier scans",
+                s.base,
+                s.scans.len() - 1
+            ),
             t.dim(),
         ),
     ]);
     let chart_rows = (d.buckets.len() as u16).clamp(1, (area.height / 3).max(3));
-    let [head, chart, lists] = Layout::vertical([
+    let history_h = if area.height >= 30 {
+        (s.scans.len() as u16 + 2).clamp(4, 10)
+    } else {
+        0
+    };
+    let [head, chart, lists, history] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Length(chart_rows + 2),
         Constraint::Min(3),
+        Constraint::Length(history_h),
     ])
     .areas(area);
+    if history_h > 0 {
+        render_history(frame, history, s, t);
+    }
     frame.render_widget(Paragraph::new(head_line), head);
 
     let block = Block::new()
@@ -195,8 +208,56 @@ pub fn render(frame: &mut Frame, area: Rect, s: &ChangesState, ctx: &Ctx, t: &Th
             Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(lists);
         (a, b)
     };
-    path_list(frame, a, "Grew", &d.grown, s.scroll, grow, ctx, t);
-    path_list(frame, b, "Shrank", &d.shrunk, s.scroll, shrink, ctx, t);
+    let not_root = |r: &&PathDelta| r.path != d.root;
+    let grown: Vec<PathDelta> = d.grown.iter().filter(not_root).cloned().collect();
+    let shrunk: Vec<PathDelta> = d.shrunk.iter().filter(not_root).cloned().collect();
+    path_list(frame, a, "Grew", &grown, s.scroll, grow, ctx, t);
+    path_list(frame, b, "Shrank", &shrunk, s.scroll, shrink, ctx, t);
+}
+
+/// Every kept scan of the root with its total, marking the two compared.
+fn render_history(frame: &mut Frame, area: Rect, s: &ChangesState, t: &Theme) {
+    let block = Block::new()
+        .borders(Borders::TOP)
+        .border_style(t.border())
+        .title(Span::styled(" Kept scans ", t.title()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let max = s.scans.iter().map(|x| x.bytes).max().unwrap_or(1).max(1);
+    let w = inner.width as usize;
+    let bar_w = w.saturating_sub(40).max(4);
+    let lines: Vec<Line> = s
+        .scans
+        .iter()
+        .enumerate()
+        .take(inner.height as usize)
+        .map(|(i, scan)| {
+            let (mark, style) = match i {
+                0 => ("to  ", t.title()),
+                i if i == s.base => ("from", t.title()),
+                _ => ("    ", t.dim()),
+            };
+            let mut spans = vec![
+                Span::styled(format!("{mark} "), style),
+                Span::styled(format!("{:<18}", scan_label(scan)), t.text()),
+            ];
+            spans.extend(
+                widgets::bar(Bar {
+                    frac: scan.bytes as f64 / max as f64,
+                    width: bar_w,
+                    colour: t.bucket_rgb("#bd93f9"),
+                    theme: t,
+                })
+                .spans,
+            );
+            spans.push(Span::styled(
+                format!(" {:>9}", spacehog_core::human::bytes(scan.bytes)),
+                t.text(),
+            ));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 #[allow(clippy::too_many_arguments)]

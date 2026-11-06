@@ -777,7 +777,7 @@ fn executing_the_queue_trashes_into_the_trash_dir_and_counts_bytes() {
 
     for (w, h) in [(80, 24), (160, 40)] {
         let s = screen(&mut app, w, h);
-        assert!(s.contains(&format!("freed {}", r.bytes_freed_human)), "{s}");
+        assert!(s.contains(&format!("{} freed", r.bytes_freed_human)), "{s}");
         assert!(s.contains(&r.journal_id), "{s}");
         assert!(s.contains("undo"), "{s}");
     }
