@@ -53,3 +53,7 @@ On macOS the walker lists each directory with `getattrlistbulk`, which returns n
 Measured on `~/.rustup` (162,674 files, warm cache, interleaved runs, 2026-11-06): walk 1,861 ms and 629 ms before, 443 ms and 235 ms after. `sys` time roughly halved. Files, dirs, allocated bytes, and apparent bytes are identical between the two walkers and match `du -sk` exactly.
 
 Two layout facts the man page does not make obvious, both covered by `bulk::tests`: the directory attribute group is packed only for directories and the file group only for non-directories, even with `FSOPT_PACK_INVAL_ATTRS`; and `ATTR_CMN_ERROR` sits immediately after the returned-attribute set, before the name.
+
+## Index write: two more experiments that did not pay
+
+On `/Applications` (295,358 nodes, interleaved, 2026-11-06), single-row inserts took 935, 934, and 939 ms. Multi-row `INSERT` statements of 256 rows took 1,182, 1,234, and 1,361 ms, so they are slower. A 64 MB page cache during the write averaged 790 ms against 854 ms, about 7%, which is not worth 64 MB more peak memory. Single-row prepared inserts with the default cache stay.
