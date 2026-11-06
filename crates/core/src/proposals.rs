@@ -206,7 +206,7 @@ impl Index {
         let mut paths: Vec<PathBuf> = req
             .paths
             .iter()
-            .map(|p| crate::engine::canonical(p))
+            .map(|p| crate::engine::canonical_entry(p))
             .collect();
         paths.sort();
         paths.dedup();

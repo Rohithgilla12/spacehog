@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### M5 cleanup and safety (core and CLI)
+
+- Executor in core shared by every surface: re-validates each item, re-stats it (inode, type, and size must match the index), then trashes or deletes it and journals the outcome to SQLite and `journal.jsonl`.
+- Agents can execute only approved proposals, or pending trash proposals whose every item is in `mcp.auto_approve`. Permanent deletes always need approval, and the confirm string must equal the proposal total.
+- On macOS, trashing is a rename into `~/.Trash`, so `undo` can put items back; the system trash API cannot list or restore there.
+- Symlinks are proposed and deleted as links; their targets are never resolved.
+- The index subtracts freed bytes immediately and adds them back on undo.
+- `spacehog clean` (with `--dry-run`, `--permanent`, `--yes`) and `spacehog undo`.
+
 ### M2 categoriser
 
 - Rule engine with embedded default rules covering JS, Python, Go, Rust, JVM, Apple, containers, VCS, macOS app data, and user content. Users extend or override it with `~/.config/spacehog/rules.toml`.

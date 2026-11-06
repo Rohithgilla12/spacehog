@@ -182,3 +182,14 @@ fn spawn_mirror(
 pub fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
+
+/// Resolves the parent directory but not the final component, so a symlink
+/// names the link itself rather than its target.
+pub fn canonical_entry(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            canonical(parent).join(name)
+        }
+        _ => canonical(path),
+    }
+}

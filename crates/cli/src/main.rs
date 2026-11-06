@@ -1,3 +1,4 @@
+mod clean;
 mod output;
 
 use std::io::IsTerminal;
@@ -72,6 +73,35 @@ enum Command {
     /// Why a path is categorised the way it is.
     Explain {
         path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clean categorised items: propose, confirm, and execute in one step.
+    Clean {
+        /// Bucket, category, or rule id.
+        #[arg(long)]
+        category: Option<String>,
+        #[arg(long, value_parser = parse_days)]
+        stale: Option<i64>,
+        /// Explicit paths instead of a category query.
+        paths: Vec<PathBuf>,
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+        /// Show what would be cleaned and stop.
+        #[arg(long)]
+        dry_run: bool,
+        /// Delete instead of moving to the Trash. Always asks you to type the total.
+        #[arg(long)]
+        permanent: bool,
+        /// Skip the confirmation prompt (not allowed with --permanent).
+        #[arg(long, conflicts_with = "permanent")]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore everything a cleanup moved to the Trash.
+    Undo {
+        journal_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -312,6 +342,54 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 output::json(&e)?;
             } else {
                 output::explanation(&e);
+            }
+        }
+        Some(Command::Clean {
+            category,
+            stale,
+            paths,
+            limit,
+            dry_run,
+            permanent,
+            yes,
+            json,
+        }) => {
+            let index = Index::open_default()?;
+            let rules = load_rules(&config)?;
+            return clean::run(
+                &index,
+                &rules,
+                &config,
+                clean::Args {
+                    category,
+                    stale,
+                    paths,
+                    limit,
+                    dry_run,
+                    permanent,
+                    yes,
+                    json,
+                },
+            );
+        }
+        Some(Command::Undo { journal_id, json }) => {
+            let index = Index::open_default()?;
+            let restored = index.undo(&journal_id)?;
+            if json {
+                output::json(&restored)?;
+            } else {
+                for r in &restored {
+                    let status = match r.outcome {
+                        spacehog_core::cleanup::Outcome::Restored => "restored",
+                        _ => "failed",
+                    };
+                    println!(
+                        "{status:>9}  {:>10}  {}  {}",
+                        r.size_human,
+                        r.path,
+                        r.reason.as_deref().unwrap_or("")
+                    );
+                }
             }
         }
         Some(Command::Rules {

@@ -248,7 +248,7 @@ pub fn explain(
     path: &Path,
     stale_days: i64,
 ) -> Result<Explanation> {
-    let path = crate::engine::canonical(path);
+    let path = crate::engine::canonical_entry(path);
     let node = index
         .find_in_latest(&path)?
         .ok_or_else(|| Error::NotIndexed(path.clone()))?;

@@ -7,7 +7,8 @@ use crate::error::Result;
 use crate::model::{Label, NodeFlags, NodeId, NodeInfo, NodeKind, ScanId, ScanRecord, ScanStatus};
 use crate::scan::{ProgressSnapshot, ScanTree};
 
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[&str] = &[
+    r#"
 CREATE TABLE scans (
     id             INTEGER PRIMARY KEY,
     root           TEXT    NOT NULL,
@@ -107,7 +108,11 @@ CREATE TABLE journal (
     ts          INTEGER NOT NULL
 );
 CREATE INDEX journal_by_id ON journal (journal_id);
-"#];
+"#,
+    r#"
+ALTER TABLE journal ADD COLUMN trashed_to TEXT;
+"#,
+];
 
 /// Older scans of a root keep only directories, claimed items, and files at
 /// least this large, which is enough for `changes` without storing every file N times.
@@ -386,7 +391,8 @@ impl Index {
             None => return Ok(Vec::new()),
         };
         let mut stmt = self.conn.prepare_cached(&format!(
-            "{NODE_SELECT} WHERE parent_id = ?1 ORDER BY disk DESC LIMIT ?2"
+            "{NODE_SELECT} WHERE parent_id = ?1 AND (flags & {deleted}) = 0 ORDER BY disk DESC LIMIT ?2",
+            deleted = NodeFlags::DELETED
         ))?;
         let rows = stmt.query_map(params![id, limit as i64], node_from_row)?;
         let mut out = Vec::new();
@@ -463,39 +469,67 @@ impl Index {
         rows.into_iter().map(|n| self.with_path(n)).collect()
     }
 
+    /// Flags a subtree deleted and takes its bytes out of every total above it.
     pub fn mark_deleted(&self, id: NodeId) -> Result<()> {
+        self.adjust_deleted(id, true)
+    }
+
+    /// Reverses `mark_deleted` after an undo.
+    pub fn mark_restored(&self, id: NodeId) -> Result<()> {
+        self.adjust_deleted(id, false)
+    }
+
+    fn adjust_deleted(&self, id: NodeId, deleting: bool) -> Result<()> {
         let Some(n) = self.node(id)? else {
             return Ok(());
         };
+        if n.flags.has(NodeFlags::DELETED) == deleting {
+            return Ok(());
+        }
+        let sign: i64 = if deleting { -1 } else { 1 };
+        let (disk, apparent, files) = (
+            sign * n.disk_size as i64,
+            sign * n.apparent_size as i64,
+            sign * n.file_count as i64,
+        );
         let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE nodes SET flags = flags | ?3, disk = 0, apparent = 0, file_count = 0
-             WHERE id BETWEEN ?1 AND ?2",
-            params![id, last_desc(&tx, id)?, NodeFlags::DELETED],
+        let flag_sql = if deleting {
+            "UPDATE nodes SET flags = flags | ?3 WHERE id BETWEEN ?1 AND ?2"
+        } else {
+            "UPDATE nodes SET flags = flags & ~?3 WHERE id BETWEEN ?1 AND ?2"
+        };
+        tx.execute(flag_sql, params![id, n.last_desc, NodeFlags::DELETED])?;
+        let nested_claims: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(excl_disk), 0) FROM nodes WHERE claim = 1 AND id > ?1 AND id <= ?2",
+            params![id, n.last_desc],
+            |r| r.get(0),
         )?;
+        let mut owner_adjusted = n.claim;
         let mut cur = n.parent_id;
         while let Some(p) = cur {
-            tx.execute(
-                "UPDATE nodes SET disk = MAX(disk - ?2, 0), apparent = MAX(apparent - ?3, 0),
-                    file_count = MAX(file_count - ?4, 0) WHERE id = ?1",
-                params![
-                    p,
-                    n.disk_size as i64,
-                    n.apparent_size as i64,
-                    n.file_count as i64
-                ],
+            let (parent, is_claim): (Option<NodeId>, bool) = tx.query_row(
+                "SELECT parent_id, claim FROM nodes WHERE id = ?1",
+                [p],
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )?;
-            cur = tx
-                .query_row("SELECT parent_id FROM nodes WHERE id = ?1", [p], |r| {
-                    r.get(0)
-                })
-                .optional()?
-                .flatten();
+            tx.execute(
+                "UPDATE nodes SET disk = MAX(disk + ?2, 0), apparent = MAX(apparent + ?3, 0),
+                    file_count = MAX(file_count + ?4, 0) WHERE id = ?1",
+                params![p, disk, apparent, files],
+            )?;
+            if is_claim && !owner_adjusted {
+                tx.execute(
+                    "UPDATE nodes SET excl_disk = MAX(excl_disk + ?2, 0) WHERE id = ?1",
+                    params![p, disk - sign * nested_claims],
+                )?;
+                owner_adjusted = true;
+            }
+            cur = parent;
         }
         tx.execute(
-            "UPDATE scans SET bytes = MAX(bytes - ?2, 0), apparent_bytes = MAX(apparent_bytes - ?3, 0)
+            "UPDATE scans SET bytes = MAX(bytes + ?2, 0), apparent_bytes = MAX(apparent_bytes + ?3, 0)
              WHERE id = ?1",
-            params![n.scan_id, n.disk_size as i64, n.apparent_size as i64],
+            params![n.scan_id, disk, apparent],
         )?;
         tx.commit()?;
         Ok(())
@@ -504,14 +538,6 @@ impl Index {
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
-}
-
-fn last_desc(conn: &Connection, id: NodeId) -> Result<NodeId> {
-    Ok(
-        conn.query_row("SELECT last_desc FROM nodes WHERE id = ?1", [id], |r| {
-            r.get(0)
-        })?,
-    )
 }
 
 pub(crate) fn join(parent: &str, name: &str) -> String {

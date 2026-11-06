@@ -101,7 +101,18 @@ pub fn home() -> (tempfile::TempDir, PathBuf) {
     (dir, h)
 }
 
+/// Keeps journal.jsonl writes out of the real state dir. Set once per test binary.
+pub fn isolate_state() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("spacehog-test-state-{}", std::process::id()));
+        // SAFETY: runs once, before any test thread reads the variable.
+        unsafe { std::env::set_var("SPACEHOG_STATE_DIR", dir) };
+    });
+}
+
 pub fn scan(h: &Path, state: &Path) -> (Index, Arc<RuleSet>, i64) {
+    isolate_state();
     let rules = Arc::new(RuleSet::default_rules(h).unwrap());
     let cat = Arc::new(Categoriser::new(rules.clone()));
     let mut req = ScanRequest::new(h);
