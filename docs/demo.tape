@@ -63,7 +63,7 @@ Enter
 Sleep 2s
 Type "D"
 Sleep 7s
-Enter
+Escape
 Sleep 1s
 Type "1"
 Sleep 6s

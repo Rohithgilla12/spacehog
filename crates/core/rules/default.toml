@@ -21,97 +21,97 @@
 [[bucket]]
 id = "dev-caches"
 label = "Dev caches"
-colour = "#ff79c6"
+colour = "#87bafd"
 
 [[bucket]]
 id = "dev-builds"
 label = "Dev builds"
-colour = "#bd93f9"
+colour = "#8998e9"
 
 [[bucket]]
 id = "dev-envs"
 label = "Dev envs"
-colour = "#8be9fd"
+colour = "#a8d8fb"
 
 [[bucket]]
 id = "pkg-caches"
 label = "Package caches"
-colour = "#50fa7b"
+colour = "#65d0dc"
 
 [[bucket]]
 id = "toolchains"
 label = "Toolchains"
-colour = "#f1fa8c"
+colour = "#558ac0"
 
 [[bucket]]
 id = "docker-vms"
 label = "Docker/VMs"
-colour = "#6fa8ff"
+colour = "#c68bd3"
 
 [[bucket]]
 id = "ml-models"
 label = "ML models"
-colour = "#ffb86c"
+colour = "#eaa4d2"
 
 [[bucket]]
 id = "app-caches"
 label = "App caches"
-colour = "#a4ffd6"
+colour = "#61bdb2"
 
 [[bucket]]
 id = "app-data"
 label = "App data"
-colour = "#d7a6ff"
+colour = "#499b9b"
 
 [[bucket]]
 id = "apps"
 label = "Apps"
-colour = "#ff6e6e"
+colour = "#aadecb"
 
 [[bucket]]
 id = "logs"
 label = "Logs"
-colour = "#c3a88a"
+colour = "#4e8491"
 
 [[bucket]]
 id = "trash"
 label = "Trash"
-colour = "#9aa0b4"
+colour = "#9b776a"
 
 [[bucket]]
 id = "downloads"
 label = "Downloads"
-colour = "#ffd479"
+colour = "#f0c374"
 
 [[bucket]]
 id = "media"
 label = "Media"
-colour = "#ff92df"
+colour = "#f49f81"
 
 [[bucket]]
 id = "archives"
 label = "Archives"
-colour = "#e0c27a"
+colour = "#c18b5e"
 
 [[bucket]]
 id = "projects"
 label = "Projects"
-colour = "#9ece6a"
+colour = "#9b86c1"
 
 [[bucket]]
 id = "user-data"
 label = "User data"
-colour = "#7aa2f7"
+colour = "#dc8a90"
 
 [[bucket]]
 id = "vcs"
 label = "VCS"
-colour = "#f78c6c"
+colour = "#c3bcf5"
 
 [[bucket]]
 id = "other"
 label = "Other"
-colour = "#6272a4"
+colour = "#717171"
 
 [categories]
 dev-cache = "dev-caches"

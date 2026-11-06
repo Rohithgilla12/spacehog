@@ -7,7 +7,7 @@ Set FontSize 15
 Set Width 1440
 Set Height 860
 Set Padding 14
-Set Theme "Dracula"
+Set Theme { "name": "spacehog", "black": "#121417", "red": "#dc8a90", "green": "#7cd591", "yellow": "#f2b966", "blue": "#87bafd", "magenta": "#c68bd3", "cyan": "#65d0dc", "white": "#e3e5e8", "brightBlack": "#82868e", "brightRed": "#dc8a90", "brightGreen": "#7cd591", "brightYellow": "#f0c374", "brightBlue": "#92c1fd", "brightMagenta": "#eaa4d2", "brightCyan": "#a8d8fb", "brightWhite": "#ffffff", "background": "#121417", "foreground": "#e3e5e8", "selection": "#282c31", "cursor": "#92c1fd" }
 Set TypingSpeed 60ms
 Set WaitTimeout 300s
 

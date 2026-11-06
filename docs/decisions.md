@@ -66,3 +66,11 @@ The PRD's incremental rescan reuses a directory's indexed entries when its mtime
 - Reusing indexed entries means loading the previous scan's rows first, and the write of a fresh scan (62 s here) would be unchanged. The walk is no longer the dominant cost.
 
 Directory mtimes also miss files that grow in place, and `Docker.raw`, the largest single hog on many Macs, is exactly that kind of file. `--incremental` is accepted by the CLI and MCP and reports that it ran a full scan. Revisit it together with an in-place index update, which is the change that would actually cut rescan time.
+
+## Colour: one meaning per hue
+
+The first TUI palette was Dracula: about seven hues shared by 19 buckets, the safety bar, and the interface accent. Unrelated buckets looked identical (Dev caches, Media, and VCS were all pink), and green meant both "regenerable" and Package caches.
+
+Three candidates were rendered against a real home index (2026-11-06): Families, Pastel (one evenly spaced hue per bucket), and Quiet (near-grey buckets). Families was chosen. Its bucket colours are generated in OKLCH with one hue range per kind: cool for machine-made things you can rebuild, warm for your own files, and neutral grey for anything unclaimed. Colour then carries information. The cost is that related buckets are shades of one hue, so some neighbours sit closer together than in Pastel.
+
+Bucket colours live in `rules/default.toml`, so the rule file stays the single source. Safety classes and interface chrome take colours no bucket uses. The palette paints its own charcoal background, so it reads the same in any terminal. The trade-off is that it hides terminal transparency and a custom background.

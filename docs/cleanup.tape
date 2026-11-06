@@ -24,7 +24,7 @@ Type "5"
 Sleep 3s
 Type "D"
 Sleep 3.5s
-Enter
+Escape
 Sleep 2s
 Right
 Sleep 3s
@@ -34,7 +34,7 @@ Type "D"
 Sleep 3.5s
 Type "u"
 Sleep 2.5s
-Enter
+Escape
 Sleep 1s
 Type "q"
 Type "q"

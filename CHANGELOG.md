@@ -14,6 +14,7 @@
 - Visual redesign: a solid half-block donut, headline figures for the total and what is safe to free (with its stale share), a stacked bar of safety classes, wide bars on a track in every list, an Explorer whose columns line up at any depth, and a full-screen scan view with a files/s area chart and the largest folders as they finish.
 - Cleanup hardening from review: `esc` at the permanent-delete prompt rejects the proposal it created, so no one can approve and run it later without typing the total; the finished screen closes with `esc`, so a second `enter` cannot approve the next proposal; a run streams only its own journal rows; and quitting during a cleanup waits for it to finish instead of abandoning an item mid-move.
 - The Overview's file count groups thousands.
+- New colour scheme, chosen from three rendered candidates: bucket colours group by kind (cool hues for caches, builds, and packages you can rebuild; warm hues for your own files; grey for anything no rule claims) on a painted charcoal background. Safety classes, buckets, and interface chrome no longer share colours. The light theme uses the same bucket colours, darkened for white. All GIFs are re-recorded.
 - `scripts/demo-tree.sh` builds the synthetic home the GIFs record; `scripts/agent-propose.sh` files a proposal over MCP the way an agent would; `scripts/screenshots.sh` captures every view of an index with vhs.
 
 ### M6 scan diffing (core and CLI)

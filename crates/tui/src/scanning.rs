@@ -248,7 +248,7 @@ pub fn render_screen(frame: &mut Frame, area: Rect, task: &ScanTask, ctx: &Ctx, 
         frame.buffer_mut(),
         chart,
         &task.meter.samples,
-        t.bucket_rgb("#ff79c6"),
+        t.accent_rgb(),
         t,
     );
     let current = ctx.tilde(&snap.current_path);
@@ -296,7 +296,7 @@ pub fn render_screen(frame: &mut Frame, area: Rect, task: &ScanTask, ctx: &Ctx, 
                 widgets::bar(Bar {
                     frac: d.disk as f64 / max as f64,
                     width: bar_w,
-                    colour: t.bucket_rgb("#bd93f9"),
+                    colour: t.data_rgb(),
                     theme: t,
                 })
                 .spans,

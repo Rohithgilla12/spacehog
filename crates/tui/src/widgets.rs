@@ -43,10 +43,7 @@ pub fn bar(b: Bar) -> Line<'static> {
 
 /// The background a bar runs along: a step off the page in either theme.
 pub fn track_of(t: &Theme) -> Rgb {
-    match t.tone {
-        theme::Tone::Light => (0xe4, 0xe6, 0xee),
-        _ => (0x2a, 0x2c, 0x3a),
-    }
+    t.track()
 }
 
 /// Paints a shape on a half-block grid: `colour_at(x, y)` is asked for every

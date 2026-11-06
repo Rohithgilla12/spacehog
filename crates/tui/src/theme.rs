@@ -18,11 +18,16 @@ pub struct Theme {
     pub tone: Tone,
     pub truecolour: bool,
     pub icons: bool,
+    palette: &'static Palette,
 }
 
-const OTHER: &str = "#6272a4";
-
-struct Palette {
+/// Everything a session paints with. Data colours (buckets, safety classes,
+/// `data`) are kept apart from chrome (`accent`, `border`) so a hue means
+/// one thing on screen. Bucket colours live in the rule file.
+#[derive(Debug)]
+pub struct Palette {
+    /// Painted behind every frame so the palette reads the same on any terminal.
+    bg: &'static str,
     text: &'static str,
     dim: &'static str,
     border: &'static str,
@@ -31,39 +36,58 @@ struct Palette {
     good: &'static str,
     selected: &'static str,
     badge_fg: &'static str,
+    track: &'static str,
+    /// Bars that measure something other than a bucket: scan rate, history.
+    data: &'static str,
+    /// Regenerable, cache, review, protected.
+    safety: [&'static str; 4],
+    other: &'static str,
 }
 
 const DARK: Palette = Palette {
-    text: "#e6e6f0",
-    dim: "#7a7f98",
-    border: "#44475a",
-    accent: "#ff79c6",
-    warn: "#ffb86c",
-    good: "#50fa7b",
-    selected: "#383a4f",
-    badge_fg: "#282a36",
+    bg: "#121417",
+    text: "#e3e5e8",
+    dim: "#82868e",
+    border: "#3a3d42",
+    accent: "#92c1fd",
+    warn: "#f2b966",
+    good: "#7cd591",
+    selected: "#282c31",
+    badge_fg: "#121417",
+    track: "#212327",
+    data: "#92c1fd",
+    safety: ["#7cd591", "#58a484", "#f2b966", "#575e69"],
+    other: "#717171",
 };
 
+/// The light theme's background, also used by tests.
+pub const LIGHT_BG: &str = "#fafafc";
+
+/// Bucket and safety colours are darkened by `bucket_rgb` to read on white.
 const LIGHT: Palette = Palette {
+    bg: LIGHT_BG,
     text: "#1f2030",
     dim: "#6b6f80",
     border: "#c5c8d6",
-    accent: "#c2185b",
+    accent: "#2f63c4",
     warn: "#b25e00",
     good: "#1b7f3b",
     selected: "#dfe3f0",
     badge_fg: "#ffffff",
+    track: "#e4e6ee",
+    data: "#92c1fd",
+    safety: ["#7cd591", "#58a484", "#f2b966", "#a3a8b2"],
+    other: "#717171",
 };
-
-/// The light theme paints its own background so it reads the same on any terminal.
-pub const LIGHT_BG: &str = "#fafafc";
 
 impl Theme {
     pub fn new(tone: Tone, truecolour: bool, icons: bool) -> Self {
+        let palette = if tone == Tone::Light { &LIGHT } else { &DARK };
         Self {
             tone,
             truecolour,
             icons,
+            palette,
         }
     }
 
@@ -99,10 +123,24 @@ impl Theme {
     }
 
     fn palette(&self) -> &'static Palette {
-        match self.tone {
-            Tone::Light => &LIGHT,
-            _ => &DARK,
-        }
+        self.palette
+    }
+
+    pub fn track(&self) -> Rgb {
+        parse_hex(self.palette.track).unwrap_or((0x2a, 0x2c, 0x3a))
+    }
+
+    /// The colour for bars that are not a bucket, such as the scan rate.
+    pub fn data_rgb(&self) -> Rgb {
+        self.bucket_rgb(self.palette.data)
+    }
+
+    pub fn accent_rgb(&self) -> Rgb {
+        self.bucket_rgb(self.palette.accent)
+    }
+
+    pub fn warn_rgb(&self) -> Rgb {
+        parse_hex(self.palette.warn).unwrap_or((0xff, 0xb8, 0x6c))
     }
 
     pub fn hex(&self, hex: &str) -> Color {
@@ -135,7 +173,7 @@ impl Theme {
     pub fn bucket_of(&self, rules: &RuleSet, bucket: Option<&str>) -> Rgb {
         let colour = bucket
             .and_then(|b| rules.bucket(b))
-            .map_or(OTHER, |b| b.colour.as_str());
+            .map_or(self.palette.other, |b| b.colour.as_str());
         self.bucket_rgb(colour)
     }
 
@@ -146,11 +184,12 @@ impl Theme {
     /// One colour per safety class, shared by the stacked bar and its labels.
     pub fn safety_rgb(&self, s: spacehog_core::rules::Safety) -> Rgb {
         use spacehog_core::rules::Safety;
+        let [regen, cache, review, protected] = self.palette.safety;
         self.bucket_rgb(match s {
-            Safety::Regenerable => "#50fa7b",
-            Safety::Cache => "#8be9fd",
-            Safety::Review => "#ffb86c",
-            Safety::Protected => "#6272a4",
+            Safety::Regenerable => regen,
+            Safety::Cache => cache,
+            Safety::Review => review,
+            Safety::Protected => protected,
         })
     }
 
@@ -201,10 +240,16 @@ impl Theme {
         Style::new().fg(self.hex(self.palette().border))
     }
 
-    /// The frame background: only the light theme paints one.
+    /// The frame background; `None` under `NO_COLOR`.
     pub fn base(&self) -> Option<Style> {
-        (self.tone == Tone::Light)
-            .then(|| Style::new().bg(self.hex(LIGHT_BG)).fg(self.hex(LIGHT.text)))
+        if self.mono() {
+            return None;
+        }
+        Some(
+            Style::new()
+                .bg(self.hex(self.palette.bg))
+                .fg(self.hex(self.palette.text)),
+        )
     }
 
     /// A Nerd Font glyph when icons are on, otherwise the ASCII fallback.

@@ -124,7 +124,7 @@ pub fn changes(
             let delta = a as i64 - b as i64;
             BucketDelta {
                 label: def.map_or_else(|| id.clone(), |d| d.label.clone()),
-                colour: def.map_or_else(|| "#6272a4".into(), |d| d.colour.clone()),
+                colour: def.map_or_else(|| "#717171".into(), |d| d.colour.clone()),
                 id,
                 before: b,
                 after: a,

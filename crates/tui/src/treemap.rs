@@ -754,7 +754,7 @@ pub fn render(
             selected: Some(s.cursor),
             hover: s.hover,
             view,
-            outline: theme.bucket_rgb("#ff79c6"),
+            outline: theme.accent_rgb(),
         },
     );
     frame.render_widget(Paragraph::new(info_line(s, ctx, theme, t)), info);

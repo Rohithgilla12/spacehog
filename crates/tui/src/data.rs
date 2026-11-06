@@ -148,7 +148,7 @@ fn slice(rules: &RuleSet, id: String, bytes: u64) -> BucketSlice {
     let def = rules.bucket(&id);
     BucketSlice {
         label: def.map_or_else(|| id.clone(), |b| b.label.clone()),
-        colour: def.map_or_else(|| "#6272a4".into(), |b| b.colour.clone()),
+        colour: def.map_or_else(|| "#717171".into(), |b| b.colour.clone()),
         id,
         bytes,
     }

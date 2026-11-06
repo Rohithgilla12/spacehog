@@ -274,7 +274,7 @@ fn render_history(frame: &mut Frame, area: Rect, s: &ChangesState, t: &Theme) {
                 widgets::bar(Bar {
                     frac: scan.bytes as f64 / max as f64,
                     width: bar_w,
-                    colour: t.bucket_rgb("#bd93f9"),
+                    colour: t.data_rgb(),
                     theme: t,
                 })
                 .spans,

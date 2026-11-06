@@ -291,9 +291,9 @@ fn render_hero(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env, tall: 
             };
             let w = usize::from(c.width.saturating_sub(1));
             let colour = if ratio > 0.9 {
-                theme::scale((255, 184, 108), 1.0)
+                t.warn_rgb()
             } else {
-                t.bucket_rgb("#bd93f9")
+                t.data_rgb()
             };
             vec![
                 Line::from(vec![

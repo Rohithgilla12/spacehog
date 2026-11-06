@@ -199,7 +199,7 @@ pub fn summary(index: &Index, rules: &RuleSet, scan: ScanId, stale_days: i64) ->
             let def = rules.bucket(&id);
             BucketSummary {
                 label: def.map_or_else(|| id.clone(), |b| b.label.clone()),
-                colour: def.map_or_else(|| "#6272a4".into(), |b| b.colour.clone()),
+                colour: def.map_or_else(|| "#717171".into(), |b| b.colour.clone()),
                 pct: if total == 0 {
                     0.0
                 } else {
