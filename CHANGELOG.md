@@ -12,6 +12,8 @@
 - Changes view (`spacehog --changes`): growth by bucket, the 30 paths that grew and shrank most, the kept scans, and `[`/`]` to pick an older baseline. With one scan kept it says to rescan later.
 - `theme = "light"` in config, `NO_COLOR` honoured with no colour attributes at all, mouse support (click to drill in, select, filter by donut segment or legend row; scroll wheel; treemap hover), and every view usable at 80x24.
 - Visual redesign: a solid half-block donut, headline figures for the total and what is safe to free (with its stale share), a stacked bar of safety classes, wide bars on a track in every list, an Explorer whose columns line up at any depth, and a full-screen scan view with a files/s area chart and the largest folders as they finish.
+- Cleanup hardening from review: `esc` at the permanent-delete prompt rejects the proposal it created, so no one can approve and run it later without typing the total; the finished screen closes with `esc`, so a second `enter` cannot approve the next proposal; a run streams only its own journal rows; and quitting during a cleanup waits for it to finish instead of abandoning an item mid-move.
+- The Overview's file count groups thousands.
 - `scripts/demo-tree.sh` builds the synthetic home the GIFs record; `scripts/agent-propose.sh` files a proposal over MCP the way an agent would; `scripts/screenshots.sh` captures every view of an index with vhs.
 
 ### M6 scan diffing (core and CLI)

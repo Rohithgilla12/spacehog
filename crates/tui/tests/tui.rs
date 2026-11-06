@@ -1116,3 +1116,86 @@ fn help_and_palette_list_every_cleanup_action() {
         spacehog_core::config::DeleteMode::Permanent
     );
 }
+
+#[test]
+fn cancelling_the_permanent_prompt_leaves_nothing_anyone_can_approve_and_run() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    let path = queue_from_overview(&mut app, "code/rs/target");
+    press(&mut app, KeyCode::Char('5'));
+    press(&mut app, KeyCode::Char('m'));
+    press(&mut app, KeyCode::Char('D'));
+    assert!(matches!(app.cleanup.phase, Phase::Confirming { .. }));
+    press(&mut app, KeyCode::Esc);
+    assert!(matches!(app.cleanup.phase, Phase::Browse));
+    let ctx = fx.ctx();
+    assert!(
+        ctx.index
+            .proposals(Some(ProposalStatus::Pending))
+            .unwrap()
+            .is_empty(),
+        "the cancelled permanent proposal is no longer pending"
+    );
+    let rejected = ctx.index.proposals(Some(ProposalStatus::Rejected)).unwrap();
+    assert_eq!(rejected.len(), 1);
+    assert_eq!(rejected[0].reason.as_deref(), Some("cancelled in the TUI"));
+    assert!(path.exists());
+}
+
+#[test]
+fn enter_on_the_done_screen_does_not_carry_over_into_approving_the_next_proposal() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    let a = agent_proposal(&fx, &[".npm/_cacache"], "npm cache");
+    std::thread::sleep(Duration::from_millis(1100));
+    let b = agent_proposal(&fx, &["Library/Caches/Homebrew"], "brew cache");
+    open_proposals_tab(&mut app);
+    app.poll_proposals().unwrap();
+    while app.cleanup.selected_proposal().unwrap().id != a {
+        press(&mut app, KeyCode::Down);
+    }
+    press(&mut app, KeyCode::Char('D'));
+    wait_for_cleanup(&mut app);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        matches!(app.cleanup.phase, Phase::Done(_)),
+        "enter stays on Done"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(matches!(app.cleanup.phase, Phase::Browse));
+    let ctx = fx.ctx();
+    assert_eq!(
+        ctx.index.proposal(&b).unwrap().unwrap().status,
+        ProposalStatus::Pending
+    );
+}
+
+#[test]
+fn a_run_streams_only_its_own_journal_rows() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    let id = agent_proposal(&fx, &[".npm/_cacache"], "npm cache");
+    fx.ctx()
+        .index
+        .connection()
+        .execute(
+            "INSERT INTO journal (journal_id, proposal_id, agent, path, size, inode, mode, outcome, error, ts, trashed_to)
+             VALUES ('jold', ?1, 'claude-code', '/ghost', 123456, 0, 'trash', 'trashed', NULL, 0, NULL)",
+            [&id],
+        )
+        .unwrap();
+    open_proposals_tab(&mut app);
+    app.poll_proposals().unwrap();
+    press(&mut app, KeyCode::Char('D'));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while let Phase::Running(run) = &app.cleanup.phase {
+        assert!(
+            run.streamed.iter().all(|s| s.path != "/ghost"),
+            "a row from an earlier run was streamed"
+        );
+        assert!(Instant::now() < deadline, "cleanup finished");
+        app.tick().unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

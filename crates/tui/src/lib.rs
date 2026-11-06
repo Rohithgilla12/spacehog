@@ -42,6 +42,10 @@ pub fn run(opts: TuiOptions) -> anyhow::Result<()> {
     let result = event_loop(&mut terminal, &mut app);
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
+    if app.cleanup.is_running() {
+        eprintln!("spacehog: waiting for the running cleanup to finish…");
+        app.cleanup.finish();
+    }
     result
 }
 

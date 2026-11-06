@@ -205,9 +205,25 @@ impl Counter {
     }
 }
 
+impl CleanupState {
+    /// Blocks until a running executor returns, so quitting never abandons
+    /// an item half-moved or leaves a run out of the journal's reach.
+    pub fn finish(&mut self) {
+        if let Phase::Running(run) = std::mem::replace(&mut self.phase, Phase::Browse) {
+            let _ = run.job.join();
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.phase, Phase::Running(_))
+    }
+}
+
 pub struct Run {
     pub ready: Ready,
     job: JoinHandle<std::result::Result<ExecutionReport, String>>,
+    /// Journal rows up to this id belong to earlier runs.
+    after: i64,
     pub streamed: Vec<Streamed>,
     pub counter: Counter,
 }
@@ -547,6 +563,11 @@ impl CleanupState {
         let config = ctx.config.clone();
         let id = ready.id.clone();
         let confirm = ready.total_human.clone();
+        let after = ctx
+            .index
+            .connection()
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM journal", [], |r| r.get(0))
+            .unwrap_or(0);
         let job = std::thread::spawn(move || {
             let index = Index::open(&db).map_err(|e| e.to_string())?;
             index
@@ -565,6 +586,7 @@ impl CleanupState {
         self.phase = Phase::Running(Run {
             ready,
             job,
+            after,
             streamed: Vec::new(),
             counter: Counter::new(),
         });
@@ -641,7 +663,13 @@ impl CleanupState {
                 mut typed,
                 wrong,
             } => match key.code {
-                KeyCode::Esc => Ok(Some("permanent delete cancelled".into())),
+                KeyCode::Esc => {
+                    // An approved leftover would let anyone holding the total run it.
+                    if ready.target == Target::Queue {
+                        ctx.index.reject(&ready.id, "cancelled in the TUI")?;
+                    }
+                    Ok(Some("permanent delete cancelled".into()))
+                }
                 KeyCode::Enter if typed.value().trim() == ready.total_human => {
                     self.run(ctx, ready);
                     Ok(None)
@@ -684,7 +712,7 @@ impl CleanupState {
                     self.phase = Phase::Done(done);
                     Ok(Some(msg))
                 }
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     self.load_queue(ctx, queue)?;
                     self.load_proposals(ctx)?;
                     Ok(None)
@@ -703,7 +731,7 @@ impl CleanupState {
     pub fn tick(&mut self, ctx: &Ctx, queue: &mut Vec<PathBuf>) -> Result<(bool, bool)> {
         match &mut self.phase {
             Phase::Running(run) => {
-                run.streamed = journal_rows(&ctx.index, &run.ready.id)?;
+                run.streamed = journal_rows(&ctx.index, &run.ready.id, run.after)?;
                 run.counter.aim(
                     run.streamed
                         .iter()
@@ -750,13 +778,13 @@ impl CleanupState {
     }
 }
 
-/// Per-item outcomes the executor has journalled so far. Each proposal runs
-/// once, so its rows are exactly this run's.
-fn journal_rows(index: &Index, proposal: &str) -> Result<Vec<Streamed>> {
+/// Per-item outcomes this run has journalled so far. A run interrupted by
+/// quitting leaves its proposal runnable, so earlier rows are skipped by id.
+fn journal_rows(index: &Index, proposal: &str, after: i64) -> Result<Vec<Streamed>> {
     let mut stmt = index.connection().prepare_cached(
-        "SELECT path, size, outcome, error FROM journal WHERE proposal_id = ?1 ORDER BY id",
+        "SELECT path, size, outcome, error FROM journal WHERE proposal_id = ?1 AND id > ?2 ORDER BY id",
     )?;
-    let rows = stmt.query_map([proposal], |r| {
+    let rows = stmt.query_map(rusqlite::params![proposal, after], |r| {
         Ok(Streamed {
             path: r.get(0)?,
             size: r.get::<_, i64>(1)? as u64,
@@ -1569,11 +1597,11 @@ fn render_run(frame: &mut Frame, area: Rect, s: &CleanupState, env: &Env) {
                         },
                         t.dim(),
                     ),
-                    Span::styled("enter", t.title()),
+                    Span::styled("esc", t.title()),
                     Span::styled(" back", t.dim()),
                 ])),
                 Err(_) => v.push(Line::from(vec![
-                    Span::styled(" enter", t.title()),
+                    Span::styled(" esc", t.title()),
                     Span::styled(" back", t.dim()),
                 ])),
             }
