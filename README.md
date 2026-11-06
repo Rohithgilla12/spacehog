@@ -11,7 +11,7 @@ It knows what `node_modules`, `target/`, `__pycache__`, Go build caches, Docker 
 
 Every recording runs against a synthetic home built by `scripts/demo-tree.sh`; regenerate them with `vhs docs/<name>.tape`.
 
-- [Overview](docs/overview.gif): totals, what is safe to free, buckets, and the largest offenders.
+- [Overview](docs/overview.gif): totals, what is safe to free, a donut of buckets that rings the selected one with its largest items, and the largest items.
 - [Treemap](docs/treemap.gif): a squarified map of any folder; `enter` zooms in, `backspace` zooms out, `+`/`-` change depth.
 - [Categories](docs/categories.gif): every rule grouped by bucket with stale totals; select paths and queue them.
 - [Cleanup](docs/cleanup.gif): your queue and agents' proposals, approved and moved to the Trash with live progress and undo.

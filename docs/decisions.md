@@ -74,3 +74,14 @@ The first TUI palette was Dracula: about seven hues shared by 19 buckets, the sa
 Three candidates were rendered against a real home index (2026-11-06): Families, Pastel (one evenly spaced hue per bucket), and Quiet (near-grey buckets). Families was chosen. Its bucket colours are generated in OKLCH with one hue range per kind: cool for machine-made things you can rebuild, warm for your own files, and neutral grey for anything unclaimed. Colour then carries information. The cost is that related buckets are shades of one hue, so some neighbours sit closer together than in Pastel.
 
 Bucket colours live in `rules/default.toml`, so the rule file stays the single source. Safety classes and interface chrome take colours no bucket uses. The palette paints its own charcoal background, so it reads the same in any terminal. The trade-off is that it hides terminal transparency and a custom background.
+
+## Overview: one figure, and a donut drawn for the grid
+
+Five donut treatments were rendered cell by cell against a real home index (2026-11-06): today's one-sample half-blocks, anti-aliased half-blocks, two rings (buckets outside, safety classes inside), the whole disk with free space as the gap, and a focus mode. Anti-aliasing plus focus was chosen.
+
+Anti-aliasing samples each half-block pixel on a 4x4 grid and blends partly covered pixels into the page colour, so arcs fade instead of stepping. It needs truecolour only: no special glyphs and no image protocol, so it works in every modern terminal and in the vhs recordings. Without truecolour a blend would snap to the nearest of 256 colours and look noisy, so those terminals keep the one-sample drawing. The cost is 16 colour lookups per pixel, which is well under a millisecond for a donut and runs only on redraw.
+
+Focus mode reuses the existing bucket selection: the slice lifts out, the rest fade, and the bucket's largest listed items ring it. The donut reserves room for that ring even when nothing is selected, so selecting never resizes it; the price is a donut about a fifth smaller than its area allows. Items are drawn only while they fit inside the bucket's total, so nested claims are never counted twice, and items under 2% of the bucket merge into one faded arc.
+
+Two rings and the whole-disk ring stay unbuilt. Two rings would replace the safety bar, but the inner and outer rings divide the same bytes independently, so an inner arc does not sit under the buckets it belongs to and readers expect it to. The whole-disk ring makes a nearly full disk vivid but shrinks every bucket; the gauge beside the headline already carries that number.
+

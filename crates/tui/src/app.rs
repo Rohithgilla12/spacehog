@@ -395,7 +395,9 @@ impl App {
             View::Overview => match hit {
                 Some(Hit::Donut) => {
                     let area = found.map(|(r, _)| r).unwrap_or_default();
-                    if let Some(b) = s.overview.bucket_at(area, pos.x, pos.y) {
+                    if let Some(i) = s.overview.item_at(area, pos.x, pos.y, toggles.size) {
+                        s.overview.cursor = i;
+                    } else if let Some(b) = s.overview.bucket_at(area, pos.x, pos.y) {
                         s.overview.bucket = if s.overview.bucket == Some(b) {
                             None
                         } else {

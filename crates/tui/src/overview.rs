@@ -5,26 +5,26 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::Paragraph;
 use spacehog_core::human;
 use spacehog_core::model::SizeMode;
-use spacehog_core::report::{self, Item, RuleSummary};
+use spacehog_core::report::Item;
 use spacehog_core::rules::Safety;
 use tui_big_text::{BigText, PixelSize};
 
 use crate::app::Hit;
 use crate::data::{self, BucketSlice, Ctx, SafetySplit, Snapshot, Toggles};
-use crate::theme::{self, Theme};
+use crate::theme::{self, Rgb, Theme};
 use crate::widgets::{self, Bar, Segment};
 
 /// The Overview's data and cursor. `bucket` is the selected donut segment,
-/// which narrows the offenders list to that bucket.
+/// which narrows the item list to that bucket and lifts its slice out of
+/// the donut with a ring of its largest items around it.
 #[derive(Debug, Default)]
 pub struct OverviewState {
     pub buckets: Vec<BucketSlice>,
     pub top: Vec<Item>,
     pub safety: SafetySplit,
-    pub rules: Vec<RuleSummary>,
     pub bucket: Option<usize>,
     pub cursor: usize,
     scroll: usize,
@@ -36,12 +36,6 @@ impl OverviewState {
         self.buckets = data::buckets(ctx, snap, t)?;
         self.bucket = selected_id.and_then(|id| self.buckets.iter().position(|b| b.id == id));
         self.safety = data::safety_split(ctx, snap, t)?;
-        self.rules = report::summary(&ctx.index, &ctx.rules, snap.scan.id, ctx.config.stale_days)?
-            .rules
-            .into_iter()
-            .filter(|r| r.bytes > 0)
-            .take(24)
-            .collect();
         self.reload_top(ctx, snap, t, filter)
     }
 
@@ -91,62 +85,133 @@ impl OverviewState {
         self.cursor = 0;
     }
 
-    /// Cumulative share where each bucket's arc ends, clockwise from 12 o'clock.
-    fn bounds(&self) -> Vec<f64> {
+    /// Each bucket's arc as (start, end) turns, clockwise from 12 o'clock.
+    fn arcs(&self) -> Vec<(f64, f64)> {
         let total: u64 = self.buckets.iter().map(|b| b.bytes).sum();
         let mut acc = 0u64;
         self.buckets
             .iter()
             .map(|b| {
+                let from = acc;
                 acc += b.bytes;
                 if total == 0 {
-                    1.0
+                    (0.0, 1.0)
                 } else {
-                    acc as f64 / total as f64
+                    (from as f64 / total as f64, acc as f64 / total as f64)
                 }
             })
             .collect()
     }
 
+    /// The selected bucket's largest listed items as arcs inside its slice:
+    /// (start, end, index into `top`). Stops before an item would overrun
+    /// the bucket or shrink to a sliver; the rest of the slice is "smaller".
+    fn item_arcs(&self, mode: SizeMode) -> Vec<(f64, f64, usize)> {
+        let Some(i) = self.bucket else {
+            return Vec::new();
+        };
+        let Some(&(from, to)) = self.arcs().get(i) else {
+            return Vec::new();
+        };
+        let bytes = self.buckets[i].bytes.max(1) as f64;
+        let (mut at, mut used, mut out) = (from, 0.0, Vec::new());
+        for (k, item) in self.top.iter().enumerate().take(8) {
+            let b = data::item_size(item, mode) as f64;
+            if used + b > bytes || b / bytes < 0.02 {
+                break;
+            }
+            let end = at + b / bytes * (to - from);
+            out.push((at, end, k));
+            (at, used) = (end, used + b);
+        }
+        out
+    }
+
     /// The bucket whose arc is under a cell of the donut drawn in `area`.
     pub fn bucket_at(&self, area: Rect, col: u16, row: u16) -> Option<usize> {
-        let g = Ring::new(area);
-        let x = f64::from(col.checked_sub(area.x)?) + 0.5;
-        let y = f64::from(row.checked_sub(area.y)?) * 2.0 + 1.0;
-        let (r, turn) = g.polar(x, y);
-        if r > g.outer + 1.0 {
+        let ring = Ring::new(area);
+        let (x, y) = cell_centre(area, col, row)?;
+        let (r, turn) = ring.polar(x, y, (0.0, 0.0));
+        if r > ring.outer + 1.0 {
             return None;
         }
-        self.bounds().iter().position(|b| turn <= *b)
+        self.arcs().iter().position(|(_, end)| turn <= *end)
+    }
+
+    /// The listed item whose arc in the selected bucket's ring is under a cell.
+    pub fn item_at(&self, area: Rect, col: u16, row: u16, mode: SizeMode) -> Option<usize> {
+        let ring = Ring::new(area);
+        let (x, y) = cell_centre(area, col, row)?;
+        let arc = *self.arcs().get(self.bucket?)?;
+        let (r, turn) = ring.polar(x, y, ring.lift(arc));
+        if r < ring.items_in - 0.5 || r > ring.items_out + 1.0 {
+            return None;
+        }
+        self.item_arcs(mode)
+            .into_iter()
+            .find(|(from, to, _)| (*from..*to).contains(&turn))
+            .map(|(_, _, k)| k)
     }
 }
 
-/// Donut geometry in half-block pixels, which are about square.
+fn cell_centre(area: Rect, col: u16, row: u16) -> Option<(f64, f64)> {
+    let x = f64::from(col.checked_sub(area.x)?) + 0.5;
+    let y = f64::from(row.checked_sub(area.y)?) * 2.0 + 1.0;
+    Some((x, y))
+}
+
+/// Donut geometry in half-block pixels, which are about square. The donut
+/// leaves room outside it for a selected slice to lift out and ring its items,
+/// so selecting never resizes it.
 struct Ring {
     cx: f64,
     cy: f64,
-    outer: f64,
     inner: f64,
+    outer: f64,
+    items_in: f64,
+    items_out: f64,
+    room: f64,
 }
+
+/// Arc length, in pixels, left dark between neighbouring arcs.
+const GAP: f64 = 0.8;
 
 impl Ring {
     fn new(area: Rect) -> Self {
         let (w, h) = (f64::from(area.width), f64::from(area.height) * 2.0);
-        let outer = (w.min(h) / 2.0 - 0.5).max(1.0);
+        let room = (w.min(h) / 2.0 - 0.5).max(1.0);
+        let outer = room * 0.78;
         Self {
             cx: w / 2.0,
             cy: h / 2.0,
+            inner: outer * 0.6,
             outer,
-            inner: outer * 0.58,
+            items_in: room * 0.83,
+            items_out: room * 0.97,
+            room,
         }
     }
 
-    /// Radius and turn (0..1, clockwise from 12 o'clock) of a pixel centre.
-    fn polar(&self, x: f64, y: f64) -> (f64, f64) {
-        let (dx, dy) = (x - self.cx, y - self.cy);
+    /// How far a selected arc's centre moves out along its middle.
+    fn lift(&self, (from, to): (f64, f64)) -> (f64, f64) {
+        let mid = (from + to) / 2.0 * TAU;
+        let d = self.room * 0.03;
+        (mid.sin() * d, -mid.cos() * d)
+    }
+
+    /// Radius and turn (0..1, clockwise from 12 o'clock) of a point, measured
+    /// from the centre moved by `shift`.
+    fn polar(&self, x: f64, y: f64, shift: (f64, f64)) -> (f64, f64) {
+        let (dx, dy) = (x - self.cx - shift.0, y - self.cy - shift.1);
         let r = (dx * dx + dy * dy).sqrt();
         (r, (dx.atan2(-dy) / TAU).rem_euclid(1.0))
     }
+}
+
+/// Whether a point at radius `r` and `turn` is clear of the gap at either end
+/// of an arc. A lone full circle has no ends.
+fn clear_of_ends(turn: f64, (from, to): (f64, f64), r: f64) -> bool {
+    to - from >= 1.0 || (turn - from).min(to - turn) * TAU * r >= GAP / 2.0
 }
 
 pub struct Env<'a> {
@@ -177,48 +242,42 @@ pub fn render(
         return;
     }
     let tall = area.height >= 30;
-    let hero_h = if tall { 5 } else { 2 };
-    let bottom_h = if area.height >= 42 {
-        (area.height / 4).clamp(6, 14)
-    } else {
-        0
-    };
-    let [hero, _, safety, main, bottom] = Layout::vertical([
-        Constraint::Length(hero_h),
+    let [hero, _, safety, _, main] = Layout::vertical([
+        Constraint::Length(if tall { 5 } else { 2 }),
         Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(if tall { 3 } else { 2 }),
+        Constraint::Length(1),
         Constraint::Min(8),
-        Constraint::Length(bottom_h),
     ])
     .areas(area);
     render_hero(frame, hero, s, f, tall);
     render_safety_bar(frame, safety, s, f);
     let left_w = match main.width {
-        w if w >= 140 => w * 2 / 5,
+        w if w >= 120 => w / 2,
         w if w >= 100 => 38,
         _ => 30,
     };
-    let [left, right] =
-        Layout::horizontal([Constraint::Length(left_w), Constraint::Min(30)]).areas(main);
+    let [left, _, right] = Layout::horizontal([
+        Constraint::Length(left_w),
+        Constraint::Length(3),
+        Constraint::Min(30),
+    ])
+    .areas(main);
     render_buckets(frame, left, s, f, hits);
     render_top(frame, right, s, f, hits);
-    if bottom_h > 0 {
-        render_rules(frame, bottom, s, f);
-    }
 }
 
 fn total_line<'a>(s: &OverviewState, f: &Env<'a>) -> Line<'a> {
     let t = f.theme;
     let mut spans = vec![
-        Span::styled(human::bytes(f.snap.root.size(f.toggles.size)), t.title()),
-        Span::styled(" in ", t.dim()),
-        Span::styled(f.ctx.tilde(&f.snap.root.path), t.text()),
-        Span::styled("  · ", t.dim()),
         Span::styled(
             human::bytes(s.safety.safe()),
             Style::new().fg(t.good()).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" safe to free", t.dim()),
+        Span::styled(" safe to free  · ", t.dim()),
+        Span::styled(human::bytes(f.snap.root.size(f.toggles.size)), t.text()),
+        Span::styled(" in ", t.dim()),
+        Span::styled(f.ctx.tilde(&f.snap.root.path), t.text()),
     ];
     if let Some(b) = s.selected_bucket() {
         spans.push(Span::styled(
@@ -229,107 +288,113 @@ fn total_line<'a>(s: &OverviewState, f: &Env<'a>) -> Line<'a> {
     Line::from(spans)
 }
 
-/// Two headline figures, each as big as the space allows, and the volume gauge.
+/// What you can free, as large as the space allows, beside what was scanned
+/// and how full the volume is.
 fn render_hero(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env, tall: bool) {
     let t = f.theme;
-    let total = human::bytes(f.snap.root.size(f.toggles.size));
     let safe = human::bytes(s.safety.safe());
-    let size_word = match f.toggles.size {
-        SizeMode::Disk => "on disk in",
-        SizeMode::Apparent => "apparent size in",
-    };
-    let fig_w = if tall { 4 * 9 } else { 28 };
-    let [a, b, c] = Layout::horizontal([
-        Constraint::Length(fig_w + 2),
-        Constraint::Length(fig_w + 2),
+    let safe_style = Style::new().fg(t.good()).add_modifier(Modifier::BOLD);
+    let caption = Line::from(vec![
+        Span::styled("safe to free", t.text()),
+        Span::styled(" · ", t.dim()),
+        Span::styled(human::bytes(s.safety.stale_safe), Style::new().fg(t.warn())),
+        Span::styled(" of it stale", t.dim()),
+    ]);
+    let side_w = 50.min(area.width / 2);
+    let [left, _, side] = Layout::horizontal([
         Constraint::Min(20),
+        Constraint::Length(2),
+        Constraint::Length(side_w),
     ])
     .areas(area);
-    let figure = |frame: &mut Frame, r: Rect, value: String, style: Style, caption: Line| {
-        let [num, cap] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(r);
-        if tall {
-            frame.render_widget(
-                BigText::builder()
-                    .pixel_size(PixelSize::Quadrant)
-                    .style(style)
-                    .lines(vec![value.into()])
-                    .build(),
-                num,
-            );
-        } else {
-            frame.render_widget(Paragraph::new(Span::styled(value, style)), num);
-        }
+    if tall {
+        let [num, cap] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(left);
+        frame.render_widget(
+            BigText::builder()
+                .pixel_size(PixelSize::Quadrant)
+                .style(safe_style)
+                .lines(vec![safe.into()])
+                .build(),
+            num,
+        );
         frame.render_widget(Paragraph::new(caption), cap);
+    } else {
+        let mut first = vec![Span::styled(safe, safe_style), Span::raw(" ")];
+        first.extend(caption.spans);
+        frame.render_widget(Paragraph::new(Line::from(first)), left);
+    }
+
+    let size_word = match f.toggles.size {
+        SizeMode::Disk => " on disk in ",
+        SizeMode::Apparent => " apparent size in ",
     };
-    figure(
-        frame,
-        a,
-        total,
-        t.title(),
-        Line::from(vec![
-            Span::styled(format!("{size_word} "), t.dim()),
-            Span::styled(f.ctx.tilde(&f.snap.root.path), t.text()),
-        ]),
+    let scanned = Line::from(vec![
+        Span::styled(
+            human::bytes(f.snap.root.size(f.toggles.size)),
+            t.text().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(size_word, t.dim()),
+        Span::styled(f.ctx.tilde(&f.snap.root.path), t.text()),
+    ]);
+    let files = Line::styled(
+        format!(
+            "{} files · scanned {}",
+            crate::scanning::count(f.snap.scan.files),
+            f.snap.scan.finished_at.map_or("never".into(), data::ago)
+        ),
+        t.dim(),
     );
-    figure(
-        frame,
-        b,
-        safe,
-        Style::new().fg(t.good()).add_modifier(Modifier::BOLD),
-        Line::from(vec![
-            Span::styled("safe to free · ", t.dim()),
-            Span::styled(human::bytes(s.safety.stale_safe), Style::new().fg(t.warn())),
-            Span::styled(" stale", t.dim()),
-        ]),
-    );
-    let lines = match &f.snap.volume {
+    let (gauge, free) = match &f.snap.volume {
         Some(v) => {
             let ratio = if v.total == 0 {
                 0.0
             } else {
                 v.used as f64 / v.total as f64
             };
-            let w = usize::from(c.width.saturating_sub(1));
             let colour = if ratio > 0.9 {
                 t.warn_rgb()
             } else {
                 t.data_rgb()
             };
-            vec![
-                Line::from(vec![
-                    Span::styled(v.mount.clone(), t.text()),
-                    Span::styled(format!("  {:.0}% used", ratio * 100.0), t.dim()),
-                ]),
+            let label = format!("{} ", v.mount);
+            let pct = format!(" {:.0}%", ratio * 100.0);
+            let w =
+                usize::from(side.width).saturating_sub(label.chars().count() + pct.chars().count());
+            let mut spans = vec![Span::styled(label, t.dim())];
+            spans.extend(
                 widgets::bar(Bar {
                     frac: ratio,
                     width: w,
                     colour,
                     theme: t,
-                }),
-                Line::from(vec![
-                    Span::styled(v.free_human.clone(), t.text().add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" free of {}", v.total_human), t.dim()),
-                ]),
-                Line::styled(
-                    format!(
-                        "{} files · scanned {}",
-                        crate::scanning::count(f.snap.scan.files),
-                        f.snap.scan.finished_at.map_or("never".into(), data::ago)
-                    ),
-                    t.dim(),
+                })
+                .spans,
+            );
+            spans.push(Span::styled(
+                pct,
+                Style::new().fg(t.rgb(colour)).add_modifier(Modifier::BOLD),
+            ));
+            let free = Line::from(vec![
+                Span::styled(
+                    v.free_human.clone(),
+                    Style::new().fg(t.rgb(colour)).add_modifier(Modifier::BOLD),
                 ),
-            ]
+                Span::styled(format!(" free of {}", v.total_human), t.dim()),
+            ]);
+            (Line::from(spans), free)
         }
-        None => vec![Line::styled("volume unknown", t.dim())],
+        None => (Line::styled("volume unknown", t.dim()), Line::default()),
     };
-    let shown: Vec<Line> = if tall {
-        lines
+    let lines = if tall {
+        vec![Line::default(), scanned, files, gauge, free]
     } else {
-        lines.into_iter().take(2).collect()
+        vec![scanned, gauge]
     };
-    frame.render_widget(Paragraph::new(shown), c);
+    frame.render_widget(Paragraph::new(lines), side);
 }
 
+/// The safety classes as one bar with their labels under it and, given a
+/// third row, a bracket under the classes that make up "safe to free".
 fn render_safety_bar(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env) {
     let t = f.theme;
     let sp = s.safety;
@@ -353,6 +418,32 @@ fn render_safety_bar(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env) 
     })
     .collect();
     widgets::stacked(frame.buffer_mut(), area, &segs, t);
+
+    let total = sp.regenerable + sp.cache + sp.review + sp.protected;
+    if area.height < 3 || total == 0 || sp.safe() == 0 {
+        return;
+    }
+    let w = ((sp.safe() as f64 / total as f64) * f64::from(area.width)).round() as usize;
+    if w < 3 {
+        return;
+    }
+    let label = format!(" {} safe to free ", human::bytes(sp.safe()));
+    let n = label.chars().count();
+    let line = if w >= n + 4 {
+        let left = (w - 2 - n) / 2;
+        format!(
+            "╰{}{label}{}╯",
+            "─".repeat(left),
+            "─".repeat(w - 2 - n - left)
+        )
+    } else {
+        format!("╰{}╯", "─".repeat(w - 2))
+    };
+    let row = Rect::new(area.x, area.y + 2, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(line, Style::new().fg(t.good()))),
+        row,
+    );
 }
 
 fn render_buckets(
@@ -363,36 +454,42 @@ fn render_buckets(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let t = f.theme;
-    let block = Block::new()
-        .borders(Borders::RIGHT | Borders::TOP)
-        .border_style(t.border())
-        .title(Span::styled(" Buckets ", t.title()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let (donut, legend) = if inner.width >= 64 {
-        let dw = (inner.height * 2).min(inner.width * 11 / 20);
+    let [head, _, inner] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Where it goes", t.text().add_modifier(Modifier::BOLD)),
+            Span::styled(format!("   {} buckets", s.buckets.len()), t.dim()),
+        ])),
+        head,
+    );
+    // The donut goes beside the legend or above it, whichever lets it grow.
+    let beside = inner.width.saturating_sub(38).min(inner.height * 2);
+    let legend_rows = (s.buckets.len() as u16).min(inner.height / 2);
+    let above = inner
+        .width
+        .min(inner.height.saturating_sub(legend_rows + 1) * 2);
+    let (donut, legend) = if inner.width >= 64 && beside >= above {
         let [a, _, b] = Layout::horizontal([
-            Constraint::Length(dw),
+            Constraint::Length(beside),
             Constraint::Length(2),
             Constraint::Min(10),
         ])
         .areas(inner);
         (
             Rect {
-                height: dw / 2,
+                height: beside / 2,
                 ..a
             },
             b,
         )
     } else {
-        let legend_rows = (s.buckets.len() as u16).min(inner.height / 2);
-        let dh = inner
-            .height
-            .saturating_sub(legend_rows + 1)
-            .min(inner.width / 2)
-            .max(4);
         let [a, _, b] = Layout::vertical([
-            Constraint::Length(dh),
+            Constraint::Length((above / 2).max(4)),
             Constraint::Length(1),
             Constraint::Min(1),
         ])
@@ -410,59 +507,100 @@ fn render_buckets(
     render_legend(frame, legend, s, f, hits);
 }
 
-/// Each bucket's share as a solid arc on a half-block grid.
+/// Each bucket's share as an arc, with edges blended into the page and a
+/// dark gap between arcs. A selected bucket's arc lifts out of the ring, the
+/// rest fade, and its largest items ring it, the one under the cursor lit.
 fn render_donut(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env) {
     let t = f.theme;
     let ring = Ring::new(area);
-    let bounds = s.bounds();
-    let colours: Vec<_> = s
+    let arcs = s.arcs();
+    let bg = t.bg_rgb();
+    let colours: Vec<Rgb> = s
         .buckets
         .iter()
         .enumerate()
         .map(|(i, b)| {
             let c = t.bucket_rgb(&b.colour);
             match s.bucket {
-                Some(sel) if sel != i => theme::scale(c, 0.3),
+                Some(sel) if sel != i => theme::mix(c, bg, 0.62),
                 _ => c,
             }
         })
         .collect();
+    let items = s.item_arcs(f.toggles.size);
+    let selected = s.bucket.and_then(|i| Some((i, *arcs.get(i)?)));
     let mono = t.mono();
-    widgets::half_blocks(frame.buffer_mut(), area, t, |x, y| {
-        let (r, turn) = ring.polar(f64::from(x) + 0.5, f64::from(y) + 0.5);
-        if r < ring.inner || r > ring.outer {
+    widgets::smooth(frame.buffer_mut(), area, t, |x, y| {
+        if let Some((i, arc)) = selected {
+            let (r, turn) = ring.polar(x, y, ring.lift(arc));
+            let inside = (arc.0..arc.1).contains(&turn) && clear_of_ends(turn, arc, r);
+            if inside && (ring.inner..=ring.outer).contains(&r) {
+                return Some(colours[i]);
+            }
+            if inside && (ring.items_in..=ring.items_out).contains(&r) {
+                let lit = colours[i];
+                return Some(
+                    match items.iter().find(|(a, b, _)| (*a..*b).contains(&turn)) {
+                        Some(&(a, b, k)) if clear_of_ends(turn, (a, b), r) => {
+                            if k == s.cursor || mono {
+                                lit
+                            } else {
+                                theme::mix(lit, bg, 0.45)
+                            }
+                        }
+                        Some(_) => return None,
+                        None => theme::mix(lit, bg, 0.78),
+                    },
+                );
+            }
+        }
+        let (r, turn) = ring.polar(x, y, (0.0, 0.0));
+        if !(ring.inner..=ring.outer).contains(&r) {
             return None;
         }
-        let i = bounds.iter().position(|b| turn <= *b)?;
+        let i = arcs.iter().position(|(_, end)| turn <= *end)?;
+        if Some(i) == s.bucket || !clear_of_ends(turn, arcs[i], r) {
+            return None;
+        }
         if mono {
-            let lit = s.bucket.is_none_or(|sel| sel == i);
-            let solid = if s.bucket.is_some() { lit } else { i % 2 == 0 };
-            if !solid && (x + y) % 2 == 1 {
+            let (px, py) = (x as u16, y as u16);
+            let solid = if s.bucket.is_some() {
+                false
+            } else {
+                i % 2 == 0
+            };
+            if !solid && (px + py) % 2 == 1 {
                 return None;
             }
         }
         Some(colours[i])
     });
     let total: u64 = s.buckets.iter().map(|b| b.bytes).sum();
-    let (label, sub) = match s.selected_bucket() {
-        Some(b) if total > 0 => (
-            format!("{:.0}%", b.bytes as f64 / total as f64 * 100.0),
-            b.label.clone(),
-        ),
-        _ => (human::bytes(total), "scanned".to_string()),
+    let hole = ((ring.inner * 2.0) as usize).saturating_sub(2);
+    let lines: Vec<(String, Style)> = match s.selected_bucket() {
+        Some(b) if total > 0 => vec![
+            (b.label.clone(), Style::new().fg(t.bucket_hex(&b.colour))),
+            (human::bytes(b.bytes), t.text().add_modifier(Modifier::BOLD)),
+            (
+                format!("{:.1}%", b.bytes as f64 / total as f64 * 100.0),
+                t.dim(),
+            ),
+        ],
+        _ => vec![
+            (human::bytes(total), t.text().add_modifier(Modifier::BOLD)),
+            ("scanned".into(), t.dim()),
+        ],
     };
-    let hole = (ring.inner * 2.0) as usize;
-    if hole > label.chars().count() + 1 && area.height >= 4 {
-        let cy = area.y + area.height / 2;
-        let put = |frame: &mut Frame, text: &str, y: u16, style: Style| {
-            let w = (text.chars().count() as u16).min(area.width);
-            let r = Rect::new(area.x + (area.width - w) / 2, y, w, 1);
-            frame.render_widget(Paragraph::new(Span::styled(text.to_string(), style)), r);
-        };
-        put(frame, &label, cy.saturating_sub(1), t.title());
-        if hole > sub.chars().count() + 1 {
-            put(frame, &sub, cy, t.dim());
-        }
+    let rows = (ring.inner as u16).min(lines.len() as u16);
+    if hole < 8 || rows < 2 {
+        return;
+    }
+    let top = area.y + area.height / 2 - rows / 2;
+    for (k, (text, style)) in lines.into_iter().take(usize::from(rows)).enumerate() {
+        let text = data::truncate_middle(&text, hole);
+        let w = text.chars().count() as u16;
+        let r = Rect::new(area.x + (area.width - w) / 2, top + k as u16, w, 1);
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), r);
     }
 }
 
@@ -477,9 +615,17 @@ fn render_legend(
     let total: u64 = s.buckets.iter().map(|b| b.bytes).sum();
     let rows = area.height as usize;
     let w = area.width as usize;
-    let num_w = 9 + 7;
-    let label_w = w.saturating_sub(num_w + 2).clamp(6, 22);
-    let bar_w = w.saturating_sub(label_w + num_w + 3);
+    // Names come first: the percentage goes before a name is cut short.
+    let longest = s
+        .buckets
+        .iter()
+        .map(|b| b.label.chars().count())
+        .max()
+        .unwrap_or(6)
+        .clamp(6, 18);
+    let pct_w = if w >= 2 + longest + 9 + 7 { 7 } else { 0 };
+    let label_w = w.saturating_sub(2 + 9 + pct_w).clamp(6, longest);
+    let bar_w = w.saturating_sub(2 + label_w + 9 + pct_w + 1).min(24);
     let max = s.buckets.iter().map(|b| b.bytes).max().unwrap_or(1).max(1);
     let shown = if s.buckets.len() > rows {
         rows.saturating_sub(1)
@@ -502,9 +648,12 @@ fn render_legend(
                 base,
             ),
             Span::styled(format!("{:>9}", human::bytes(b.bytes)), base),
-            Span::styled(format!("{pct:>6.1}% "), t.dim()),
         ];
+        if pct_w > 0 {
+            spans.push(Span::styled(format!("{pct:>6.1}%"), t.dim()));
+        }
         if bar_w >= 4 {
+            spans.push(Span::raw(" "));
             spans.extend(
                 widgets::bar(Bar {
                     frac: b.bytes as f64 / max as f64,
@@ -538,22 +687,27 @@ fn render_top(
     hits: &mut Vec<(Rect, Hit)>,
 ) {
     let t = f.theme;
-    let mut title = vec![Span::styled(" Top offenders ", t.title())];
+    let mut title = vec![Span::styled(
+        "Largest items",
+        t.text().add_modifier(Modifier::BOLD),
+    )];
     if let Some(b) = s.selected_bucket() {
         title.push(Span::styled(
-            format!("· {} ", b.label),
+            format!(" · {}", b.label),
             Style::new().fg(t.bucket_hex(&b.colour)),
         ));
     }
     if f.toggles.stale_only {
-        title.push(Span::styled("· stale only ", Style::new().fg(t.warn())));
+        title.push(Span::styled(" · stale only", Style::new().fg(t.warn())));
     }
-    let block = Block::new()
-        .borders(Borders::TOP)
-        .border_style(t.border())
-        .title(Line::from(title));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let gap = u16::from(area.height >= 12);
+    let [head, _, inner] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(gap),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    frame.render_widget(Paragraph::new(Line::from(title)), head);
     if s.top.is_empty() {
         frame.render_widget(
             Paragraph::new("No categorised items match.").style(t.dim()),
@@ -576,12 +730,12 @@ fn render_top(
         .max(1);
     let w = inner.width as usize;
     let bar_w = if w < 60 {
-        (w * 15 / 100).max(4)
+        6
     } else {
-        (w * 22 / 100).clamp(8, 36)
+        (w * 12 / 100).clamp(8, 18)
     };
-    let label_w = if w >= 100 { 16 } else { 0 };
-    let fixed = 2 + bar_w + 10 + 6 + 2 + label_w + 1;
+    let label_w = if w >= 90 { 16 } else { 0 };
+    let fixed = 1 + 2 + 10 + bar_w + 2 + 5 + if label_w > 0 { label_w + 4 } else { 0 };
     let path_w = w.saturating_sub(fixed).max(8);
     let mut lines = Vec::new();
     for (row, (i, item)) in s.top.iter().enumerate().skip(s.scroll).take(h).enumerate() {
@@ -593,10 +747,27 @@ fn render_top(
             .filter(|d| *d >= f.ctx.config.stale_days)
             .map(human::days)
             .unwrap_or_default();
-        let mut spans = vec![Span::styled(
-            if queued { "+ " } else { "  " },
-            Style::new().fg(t.accent()),
-        )];
+        let mark = match (queued, i == s.cursor) {
+            (true, _) => "+",
+            (false, true) => "▌",
+            _ => " ",
+        };
+        let glyph_style = match item.safety {
+            Safety::Protected => t.dim(),
+            class => Style::new().fg(t.rgb(t.safety_rgb(class))),
+        };
+        let path = data::truncate_middle(&f.ctx.tilde(&item.path), path_w);
+        let cut = path.rfind('/').map_or(0, |i| i + 1);
+        let (parent, leaf) = path.split_at(cut);
+        let pad = path_w.saturating_sub(path.chars().count());
+        let mut spans = vec![
+            Span::styled(mark, Style::new().fg(t.accent())),
+            Span::styled(format!("{} ", item.safety.glyph()), glyph_style),
+            Span::styled(
+                format!("{:>9} ", human::bytes(size)),
+                t.text().add_modifier(Modifier::BOLD),
+            ),
+        ];
         spans.extend(
             widgets::bar(Bar {
                 frac: size as f64 / max as f64,
@@ -607,24 +778,16 @@ fn render_top(
             .spans,
         );
         spans.extend([
-            Span::styled(format!(" {:>9}", human::bytes(size)), t.text()),
-            Span::styled(format!(" {stale:>4} "), Style::new().fg(t.warn())),
-            Span::styled(format!("{} ", item.safety.glyph()), t.dim()),
-            Span::styled(
-                format!(
-                    "{:<path_w$}",
-                    data::truncate_middle(&f.ctx.tilde(&item.path), path_w)
-                ),
-                t.text(),
-            ),
+            Span::raw("  "),
+            Span::styled(parent.to_string(), t.dim()),
+            Span::styled(format!("{leaf}{}", " ".repeat(pad)), t.text()),
+            Span::styled(format!(" {stale:>4}"), Style::new().fg(t.warn())),
         ]);
         if label_w > 0 {
+            spans.push(Span::styled("  ● ", Style::new().fg(t.rgb(colour))));
             spans.push(Span::styled(
-                format!(
-                    " {:<label_w$}",
-                    data::truncate_middle(&item.bucket_label, label_w)
-                ),
-                Style::new().fg(t.rgb(colour)),
+                data::truncate_middle(&item.bucket_label, label_w),
+                t.dim(),
             ));
         }
         hits.push((
@@ -641,66 +804,10 @@ fn render_top(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The largest rules across the scan, in as many columns as the width holds.
-fn render_rules(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env) {
-    let t = f.theme;
-    let block = Block::new()
-        .borders(Borders::TOP)
-        .border_style(t.border())
-        .title(Span::styled(" Largest rules ", t.title()));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    let cols = (inner.width / 56).clamp(1, 4);
-    let col_areas = Layout::horizontal(vec![Constraint::Ratio(1, u32::from(cols)); cols as usize])
-        .spacing(2)
-        .split(inner);
-    let per = inner.height as usize;
-    let max = s.rules.first().map_or(1, |r| r.bytes).max(1);
-    for (c, col) in col_areas.iter().enumerate() {
-        let w = col.width as usize;
-        let label_w = (w * 2 / 5).clamp(10, 26);
-        let bar_w = w.saturating_sub(label_w + 10 + 10 + 3);
-        let lines: Vec<Line> = s
-            .rules
-            .iter()
-            .skip(c * per)
-            .take(per)
-            .map(|r| {
-                let colour = t.bucket_of(&f.ctx.rules, Some(&r.bucket));
-                let mut spans = vec![Span::styled(
-                    format!(
-                        "{} {:<label_w$}",
-                        r.safety.glyph(),
-                        data::truncate_middle(&r.label, label_w.saturating_sub(2))
-                    ),
-                    t.text(),
-                )];
-                spans.extend(
-                    widgets::bar(Bar {
-                        frac: r.bytes as f64 / max as f64,
-                        width: bar_w,
-                        colour,
-                        theme: t,
-                    })
-                    .spans,
-                );
-                spans.push(Span::styled(
-                    format!(" {:>9}", human::bytes(r.bytes)),
-                    t.text(),
-                ));
-                spans.push(Span::styled(
-                    format!(" {:>8}", format!("×{}", r.items)),
-                    t.dim(),
-                ));
-                Line::from(spans)
-            })
-            .collect();
-        frame.render_widget(Paragraph::new(lines), *col);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use spacehog_core::model::NodeKind;
+
     use super::*;
 
     fn slice(id: &str, bytes: u64) -> BucketSlice {
@@ -709,6 +816,26 @@ mod tests {
             label: id.into(),
             colour: "#ffffff".into(),
             bytes,
+        }
+    }
+
+    fn item(path: &str, size: u64) -> Item {
+        Item {
+            path: path.into(),
+            size,
+            size_human: String::new(),
+            apparent_size: size,
+            kind: NodeKind::Dir,
+            bucket: "a".into(),
+            bucket_label: "a".into(),
+            rule_id: None,
+            rule_label: None,
+            safety: Safety::Cache,
+            stale_days: None,
+            project_root: None,
+            regen_hint: None,
+            last_modified: 0,
+            node_id: 0,
         }
     }
 
@@ -741,9 +868,69 @@ mod tests {
             "right side is in the first 75%"
         );
         assert_eq!(
-            s.bucket_at(area, 15, 10),
+            s.bucket_at(area, 17, 14),
             Some(1),
             "left of 12 o'clock is the last quarter"
         );
+        assert_eq!(s.bucket_at(area, 10, 5), None, "a corner is off the ring");
+    }
+
+    #[test]
+    fn a_selected_bucket_rings_its_items_until_they_would_overrun_it() {
+        let s = OverviewState {
+            buckets: vec![slice("a", 100), slice("b", 100)],
+            top: vec![item("/big", 50), item("/mid", 30), item("/crumb", 1)],
+            bucket: Some(0),
+            ..Default::default()
+        };
+        let arcs = s.item_arcs(SizeMode::Disk);
+        assert_eq!(
+            arcs.iter().map(|a| a.2).collect::<Vec<_>>(),
+            vec![0, 1],
+            "a 1% item is a sliver"
+        );
+        assert!((arcs[0].1 - 0.25).abs() < 1e-9, "half of a half: {arcs:?}");
+        assert!((arcs[1].1 - 0.40).abs() < 1e-9, "{arcs:?}");
+
+        let over = OverviewState {
+            top: vec![item("/big", 80), item("/again", 80)],
+            ..s
+        };
+        assert_eq!(
+            over.item_arcs(SizeMode::Disk).len(),
+            1,
+            "overlap is not drawn twice"
+        );
+    }
+
+    #[test]
+    fn clicking_an_item_arc_finds_the_item() {
+        let s = OverviewState {
+            buckets: vec![slice("a", 100), slice("b", 100)],
+            top: vec![item("/big", 50), item("/mid", 30)],
+            bucket: Some(0),
+            ..Default::default()
+        };
+        let area = Rect::new(0, 0, 60, 30);
+        let ring = Ring::new(area);
+        let r = (ring.items_in + ring.items_out) / 2.0;
+        let at = |turn: f64| {
+            let shift = ring.lift((0.0, 0.5));
+            let x = ring.cx + shift.0 + r * (turn * TAU).sin();
+            let y = ring.cy + shift.1 - r * (turn * TAU).cos();
+            (x as u16, (y / 2.0) as u16)
+        };
+        let (col, row) = at(0.12);
+        assert_eq!(s.item_at(area, col, row, SizeMode::Disk), Some(0));
+        let (col, row) = at(0.33);
+        assert_eq!(s.item_at(area, col, row, SizeMode::Disk), Some(1));
+        let (col, row) = at(0.45);
+        assert_eq!(
+            s.item_at(area, col, row, SizeMode::Disk),
+            None,
+            "the smaller rest"
+        );
+        let none = OverviewState { bucket: None, ..s };
+        assert_eq!(none.item_at(area, col, row, SizeMode::Disk), None);
     }
 }

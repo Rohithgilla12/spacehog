@@ -126,6 +126,11 @@ impl Theme {
         self.palette
     }
 
+    /// The page colour shapes blend their edges into.
+    pub fn bg_rgb(&self) -> Rgb {
+        parse_hex(self.palette.bg).unwrap_or((0, 0, 0))
+    }
+
     pub fn track(&self) -> Rgb {
         parse_hex(self.palette.track).unwrap_or((0x2a, 0x2c, 0x3a))
     }
@@ -301,6 +306,12 @@ pub type Rgb = (u8, u8, u8);
 pub fn scale((r, g, b): Rgb, k: f32) -> Rgb {
     let s = |v: u8| (f32::from(v) * k).clamp(0.0, 255.0) as u8;
     (s(r), s(g), s(b))
+}
+
+/// Moves `a` towards `b` by `k` (0 keeps `a`, 1 gives `b`).
+pub fn mix(a: Rgb, b: Rgb, k: f64) -> Rgb {
+    let m = |x: u8, y: u8| (f64::from(x) + (f64::from(y) - f64::from(x)) * k).round() as u8;
+    (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
 }
 
 /// Near-black or near-white, whichever reads better on `bg`.

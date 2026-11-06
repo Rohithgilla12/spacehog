@@ -189,7 +189,7 @@ fn overview_shows_legend_and_top_offenders_at_80x24_and_wide() {
     assert!(largest.path.ends_with("code/rs/target"), "{}", largest.path);
 
     let small = screen(&mut app, 80, 24);
-    assert!(small.contains("Top offenders"), "{small}");
+    assert!(small.contains("Largest items"), "{small}");
     assert!(
         small.contains("Dev builds"),
         "legend lists the bucket:\n{small}"
@@ -215,7 +215,7 @@ fn narrow_terminal_drops_the_side_panel() {
     let fx = fixture();
     let mut app = fx.scanned_app();
     let s = screen(&mut app, 70, 24);
-    assert!(s.contains("Top offenders"), "{s}");
+    assert!(s.contains("Largest items"), "{s}");
     assert!(
         !s.contains("Docker/VMs  "),
         "legend is gone below 80 cols:\n{s}"
@@ -243,7 +243,7 @@ fn bucket_selection_filters_top_offenders() {
     assert!(!top.is_empty());
     assert!(top.iter().all(|i| i.bucket == "docker-vms"), "{top:?}");
     let s = screen(&mut app, 120, 30);
-    assert!(s.contains("Top offenders · Docker/VMs"), "{s}");
+    assert!(s.contains("Largest items · Docker/VMs"), "{s}");
     assert!(!s.contains("~/code/rs/target"), "{s}");
 }
 
@@ -505,7 +505,7 @@ fn first_run_shows_root_picker_then_scans() {
     assert!(matches!(app.overlay, Some(Overlay::Scan)));
     wait_for_scan(&mut app);
     assert!(app.session.is_some());
-    assert!(screen(&mut app, 80, 24).contains("Top offenders"));
+    assert!(screen(&mut app, 80, 24).contains("Largest items"));
 }
 
 fn session(app: &App) -> &spacehog_tui::app::Session {

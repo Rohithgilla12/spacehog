@@ -82,6 +82,56 @@ pub fn half_blocks(
     }
 }
 
+/// Paints a shape like `half_blocks`, but samples each pixel on a 4x4 grid
+/// and blends partly covered pixels into the page, so curves fade instead of
+/// stepping. `colour_at` takes pixel coordinates, where pixel (x, y) spans
+/// x..x+1 and y..y+1. Without truecolour a blend has no exact colour to land
+/// on, so each pixel is sampled once at its centre.
+pub fn smooth(
+    buf: &mut Buffer,
+    area: Rect,
+    t: &Theme,
+    colour_at: impl Fn(f64, f64) -> Option<Rgb>,
+) {
+    if t.mono() || !t.truecolour {
+        return half_blocks(buf, area, t, |x, y| {
+            colour_at(f64::from(x) + 0.5, f64::from(y) + 0.5)
+        });
+    }
+    const N: u16 = 4;
+    let bg = t.bg_rgb();
+    let pixel = |x: u16, y: u16| -> Option<Rgb> {
+        let (mut sum, mut hit) = ([0u32; 3], false);
+        for i in 0..N {
+            for j in 0..N {
+                let sx = f64::from(x) + (f64::from(i) + 0.5) / f64::from(N);
+                let sy = f64::from(y) + (f64::from(j) + 0.5) / f64::from(N);
+                let (r, g, b) = colour_at(sx, sy).inspect(|_| hit = true).unwrap_or(bg);
+                sum[0] += u32::from(r);
+                sum[1] += u32::from(g);
+                sum[2] += u32::from(b);
+            }
+        }
+        let n = u32::from(N * N);
+        hit.then(|| ((sum[0] / n) as u8, (sum[1] / n) as u8, (sum[2] / n) as u8))
+    };
+    for cy in 0..area.height {
+        for cx in 0..area.width {
+            let (top, bottom) = (pixel(cx, cy * 2), pixel(cx, cy * 2 + 1));
+            if top.is_none() && bottom.is_none() {
+                continue;
+            }
+            let cell = &mut buf[(area.x + cx, area.y + cy)];
+            cell.set_symbol("▀");
+            cell.set_style(
+                Style::new()
+                    .fg(t.rgb(top.unwrap_or(bg)))
+                    .bg(t.rgb(bottom.unwrap_or(bg))),
+            );
+        }
+    }
+}
+
 /// One labelled share of a stacked bar.
 pub struct Segment {
     pub label: String,
@@ -241,5 +291,38 @@ mod tests {
             theme: &t,
         });
         assert_eq!(text(&half), "██  ");
+    }
+
+    #[test]
+    fn smooth_blends_a_shape_edge_into_the_page() {
+        let t = Theme::new(Tone::Dark, true, false);
+        let area = Rect::new(0, 0, 20, 10);
+        let mut buf = Buffer::empty(area);
+        let red = (255, 0, 0);
+        smooth(&mut buf, area, &t, |x, y| {
+            ((x - 10.0).powi(2) + (y - 10.0).powi(2) < 64.0).then_some(red)
+        });
+        let colours: Vec<Color> = buf.content().iter().flat_map(|c| [c.fg, c.bg]).collect();
+        let (bg, solid) = (t.rgb(t.bg_rgb()), t.rgb(red));
+        assert!(colours.contains(&solid), "the inside is solid");
+        assert!(
+            colours
+                .iter()
+                .any(|c| *c != solid && *c != bg && *c != Color::Reset),
+            "edge pixels sit between the shape and the page"
+        );
+        assert_eq!(buf[(0, 0)].symbol(), " ", "pixels outside stay untouched");
+
+        let flat = Theme::new(Tone::Dark, false, false);
+        let mut buf = Buffer::empty(area);
+        smooth(&mut buf, area, &flat, |x, y| {
+            ((x - 10.0).powi(2) + (y - 10.0).powi(2) < 64.0).then_some(red)
+        });
+        let distinct: std::collections::HashSet<Color> =
+            buf.content().iter().flat_map(|c| [c.fg, c.bg]).collect();
+        assert!(
+            distinct.len() <= 3,
+            "without truecolour nothing is blended: {distinct:?}"
+        );
     }
 }
