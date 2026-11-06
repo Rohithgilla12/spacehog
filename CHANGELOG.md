@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M3 TUI: Overview, Explorer, and scan screen
+
+- Overview: disk gauge, total scanned, a braille donut of rollup buckets with a selectable legend, and the 15 largest categorised items with bucket-coloured bars, staleness badges, and safety glyphs. `enter` opens an item in Explorer and `d` queues it for cleanup.
+- Explorer: a lazily loaded tree sorted by size, with bars, percentages, bucket tags, stale badges, a breadcrumb, an `i` panel explaining the rule and safety, and a `p` treemap preview. `o` reveals in Finder and `y` copies the path.
+- Scan screen: a live modal with counters, phase, a files/s sparkline, and elapsed time. `esc` keeps the scan running in the background and the views reload when it finishes.
+- First run shows the splash and a root picker. Global keys cover help, a fuzzy command palette, filter, rescan, and toggles for apparent size, stale-only, and hidden files. Pending agent proposals show in the status strip.
+
 ### M2 categoriser
 
 - Rule engine with embedded default rules covering JS, Python, Go, Rust, JVM, Apple, containers, VCS, macOS app data, and user content. Users extend or override it with `~/.config/spacehog/rules.toml`.
