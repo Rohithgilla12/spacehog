@@ -260,3 +260,33 @@ fn running_scans_publish_their_phase_to_other_processes() {
     assert_eq!(rec.phase.as_deref(), Some("writing"));
     assert_eq!(rec.written, 1234);
 }
+
+#[test]
+fn progress_reports_top_level_dirs_as_they_finish() {
+    let fx = fixture();
+    let progress = Progress::default();
+    let tree = scan(&ScanOptions::new(fx.root()), &progress).unwrap();
+    let top = progress.finished_top_level();
+    assert!(
+        top.windows(2).all(|w| w[0].disk >= w[1].disk),
+        "largest first"
+    );
+    let dirs = tree
+        .nodes
+        .iter()
+        .filter(|n| n.parent == Some(0) && n.kind == NodeKind::Dir);
+    assert_eq!(
+        top.len(),
+        dirs.clone().count(),
+        "one entry per top-level dir"
+    );
+    for d in dirs {
+        let reported = top.iter().find(|t| t.name == *d.name).unwrap();
+        assert_eq!(
+            (reported.disk, reported.files),
+            (d.disk, d.file_count),
+            "{}",
+            d.name
+        );
+    }
+}

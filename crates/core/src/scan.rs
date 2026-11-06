@@ -62,6 +62,16 @@ pub struct Progress {
     pub cancelled: AtomicBool,
     phase: AtomicU8,
     current: Mutex<String>,
+    finished_top: Mutex<Vec<TopLevelDir>>,
+}
+
+/// A direct child of the scan root whose walk has finished, so a progress
+/// screen can show where the bytes are before the whole scan is done.
+#[derive(Debug, Clone, Serialize)]
+pub struct TopLevelDir {
+    pub name: String,
+    pub disk: u64,
+    pub files: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -95,6 +105,23 @@ impl Progress {
             current_path: self.current.lock().map(|s| s.clone()).unwrap_or_default(),
             written: self.written.load(Ordering::Relaxed),
             phase: self.phase(),
+        }
+    }
+
+    /// Finished top-level directories, largest first.
+    pub fn finished_top_level(&self) -> Vec<TopLevelDir> {
+        let mut v = self
+            .finished_top
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        v.sort_by_key(|d| std::cmp::Reverse(d.disk));
+        v
+    }
+
+    fn record_top_level(&self, dir: TopLevelDir) {
+        if let Ok(mut v) = self.finished_top.lock() {
+            v.push(dir);
         }
     }
 
@@ -419,7 +446,18 @@ impl Walker<'_> {
         }
         let dirs: Vec<RawNode> = subdirs
             .into_par_iter()
-            .map(|(n, s)| self.visit(&path.join(&*n), n, s, false))
+            .map(|(n, s)| {
+                let child = self.visit(&path.join(&*n), n, s, false);
+                if is_root {
+                    let (disk, files) = child.totals();
+                    self.progress.record_top_level(TopLevelDir {
+                        name: child.name.to_string(),
+                        disk,
+                        files,
+                    });
+                }
+                child
+            })
             .collect();
         node.children.extend(dirs);
         node
@@ -462,6 +500,16 @@ impl Walker<'_> {
 }
 
 impl RawNode {
+    fn totals(&self) -> (u64, u64) {
+        let own_file = u64::from(self.kind != NodeKind::Dir && self.kind != NodeKind::Mount);
+        self.children
+            .iter()
+            .fold((self.disk, own_file), |(d, f), c| {
+                let (cd, cf) = c.totals();
+                (d + cd, f + cf)
+            })
+    }
+
     fn errored(name: Box<str>, errno: i32) -> Self {
         RawNode {
             name,
