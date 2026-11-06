@@ -238,106 +238,26 @@ impl ScanTree {
     }
 }
 
-struct Walker<'a> {
-    opts: &'a ScanOptions,
-    root_dev: u64,
-    progress: &'a Progress,
-    seen_inodes: Mutex<HashSet<(u64, u64)>>,
+/// What the walker needs to know about one entry, whichever API listed it.
+#[derive(Debug, Clone, Copy)]
+struct Stat {
+    kind: NodeKind,
+    apparent: u64,
+    alloc: u64,
+    mtime: i64,
+    atime: i64,
+    ino: u64,
+    dev: u64,
+    nlink: u64,
+    uid: u32,
+    cloud_only: bool,
 }
 
-pub fn scan(opts: &ScanOptions, progress: &Progress) -> std::io::Result<ScanTree> {
-    let root = fs::canonicalize(&opts.root)?;
-    let meta = fs::symlink_metadata(&root)?;
-    let walker = Walker {
-        opts,
-        root_dev: meta.dev(),
-        progress,
-        seen_inodes: Mutex::new(HashSet::new()),
-    };
-    let raw = walker.visit(&root, root.to_string_lossy().into(), meta, true);
-    let mut nodes = Vec::with_capacity(progress.files.load(Ordering::Relaxed) as usize + 1024);
-    flatten(raw, None, 0, &mut nodes);
-    Ok(ScanTree { root, nodes })
-}
+/// Set on iCloud placeholders whose data lives only in the cloud.
+const SF_DATALESS: u32 = 0x4000_0000;
 
-impl Walker<'_> {
-    fn visit(&self, path: &Path, name: Box<str>, meta: Metadata, is_root: bool) -> RawNode {
-        let mut node = self.leaf(name, &meta);
-        if node.kind != NodeKind::Dir {
-            return node;
-        }
-        self.progress.dirs.fetch_add(1, Ordering::Relaxed);
-        if !is_root {
-            if self.opts.excludes.iter().any(|e| e == path) {
-                node.flags.set(NodeFlags::EXCLUDED);
-                return node;
-            }
-            if self.opts.one_file_system && meta.dev() != self.root_dev {
-                node.kind = NodeKind::Mount;
-                node.flags.set(NodeFlags::MOUNT);
-                node.apparent = 0;
-                node.disk = 0;
-                return node;
-            }
-        }
-        if self.progress.cancelled.load(Ordering::Relaxed) {
-            return node;
-        }
-        let entries = match fs::read_dir(path) {
-            Ok(rd) => rd,
-            Err(e) => {
-                node.flags.set(NodeFlags::ERROR);
-                node.errno = e.raw_os_error().unwrap_or(-1);
-                self.progress.errors.fetch_add(1, Ordering::Relaxed);
-                return node;
-            }
-        };
-        let mut subdirs = Vec::new();
-        for entry in entries.flatten() {
-            let child_path = entry.path();
-            let child_name: Box<str> = entry.file_name().to_string_lossy().into();
-            let meta = match entry.metadata() {
-                Ok(m) => m,
-                Err(e) => {
-                    self.progress.errors.fetch_add(1, Ordering::Relaxed);
-                    node.children.push(RawNode {
-                        name: child_name,
-                        kind: NodeKind::Other,
-                        apparent: 0,
-                        disk: 0,
-                        mtime: 0,
-                        atime: 0,
-                        ino: 0,
-                        dev: 0,
-                        nlink: 0,
-                        uid: 0,
-                        flags: NodeFlags(NodeFlags::ERROR),
-                        errno: e.raw_os_error().unwrap_or(-1),
-                        children: Vec::new(),
-                    });
-                    continue;
-                }
-            };
-            if meta.is_dir() {
-                subdirs.push((child_path, child_name, meta));
-            } else {
-                let leaf = self.leaf(child_name, &meta);
-                let files = self.progress.files.fetch_add(1, Ordering::Relaxed);
-                if files.is_multiple_of(512) {
-                    self.progress.note_path(&child_path);
-                }
-                node.children.push(leaf);
-            }
-        }
-        let dirs: Vec<RawNode> = subdirs
-            .into_par_iter()
-            .map(|(p, n, m)| self.visit(&p, n, m, false))
-            .collect();
-        node.children.extend(dirs);
-        node
-    }
-
-    fn leaf(&self, name: Box<str>, meta: &Metadata) -> RawNode {
+impl Stat {
+    fn of(meta: &Metadata) -> Self {
         let ft = meta.file_type();
         let kind = if ft.is_symlink() {
             NodeKind::Symlink
@@ -348,18 +268,175 @@ impl Walker<'_> {
         } else {
             NodeKind::Other
         };
+        Stat {
+            kind,
+            apparent: meta.len(),
+            alloc: meta.blocks() * 512,
+            mtime: meta.mtime(),
+            atime: meta.atime(),
+            ino: meta.ino(),
+            dev: meta.dev(),
+            nlink: meta.nlink(),
+            uid: meta.uid(),
+            cloud_only: st_flags(meta) & SF_DATALESS != 0,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn st_flags(meta: &Metadata) -> u32 {
+    use std::os::macos::fs::MetadataExt as _;
+    meta.st_flags()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn st_flags(_meta: &Metadata) -> u32 {
+    0
+}
+
+type Listing = Vec<(Box<str>, std::result::Result<Stat, i32>)>;
+
+/// Lists a directory with every entry's attributes. macOS reads them in bulk;
+/// a filesystem without bulk support falls back to readdir plus lstat.
+fn list(path: &Path) -> std::io::Result<Listing> {
+    #[cfg(target_os = "macos")]
+    match crate::bulk::read_dir(path) {
+        Ok(entries) => {
+            return Ok(entries
+                .into_iter()
+                .map(|e| {
+                    let stat = if e.errno != 0 {
+                        Err(e.errno)
+                    } else {
+                        Ok(Stat {
+                            kind: e.kind,
+                            apparent: e.apparent,
+                            alloc: e.alloc,
+                            mtime: e.mtime,
+                            atime: e.atime,
+                            ino: e.ino,
+                            dev: e.dev,
+                            nlink: e.nlink,
+                            uid: e.uid,
+                            cloud_only: e.st_flags & SF_DATALESS != 0,
+                        })
+                    };
+                    (e.name, stat)
+                })
+                .collect());
+        }
+        Err(e)
+            if e.raw_os_error() == Some(libc::ENOTSUP)
+                || e.raw_os_error() == Some(libc::EINVAL) => {}
+        Err(e) => return Err(e),
+    }
+    Ok(fs::read_dir(path)?
+        .flatten()
+        .map(|entry| {
+            let name: Box<str> = entry.file_name().to_string_lossy().into();
+            let stat = entry
+                .metadata()
+                .map(|m| Stat::of(&m))
+                .map_err(|e| e.raw_os_error().unwrap_or(-1));
+            (name, stat)
+        })
+        .collect())
+}
+
+struct Walker<'a> {
+    opts: &'a ScanOptions,
+    root_dev: u64,
+    progress: &'a Progress,
+    seen_inodes: Mutex<HashSet<(u64, u64)>>,
+}
+
+pub fn scan(opts: &ScanOptions, progress: &Progress) -> std::io::Result<ScanTree> {
+    let root = fs::canonicalize(&opts.root)?;
+    let stat = Stat::of(&fs::symlink_metadata(&root)?);
+    let walker = Walker {
+        opts,
+        root_dev: stat.dev,
+        progress,
+        seen_inodes: Mutex::new(HashSet::new()),
+    };
+    let raw = walker.visit(&root, root.to_string_lossy().into(), stat, true);
+    let mut nodes = Vec::with_capacity(progress.files.load(Ordering::Relaxed) as usize + 1024);
+    flatten(raw, None, 0, &mut nodes);
+    Ok(ScanTree { root, nodes })
+}
+
+impl Walker<'_> {
+    fn visit(&self, path: &Path, name: Box<str>, stat: Stat, is_root: bool) -> RawNode {
+        let mut node = self.leaf(name, &stat);
+        if node.kind != NodeKind::Dir {
+            return node;
+        }
+        self.progress.dirs.fetch_add(1, Ordering::Relaxed);
+        if !is_root {
+            if self.opts.excludes.iter().any(|e| e == path) {
+                node.flags.set(NodeFlags::EXCLUDED);
+                return node;
+            }
+            if self.opts.one_file_system && stat.dev != self.root_dev {
+                node.kind = NodeKind::Mount;
+                node.flags.set(NodeFlags::MOUNT);
+                node.apparent = 0;
+                node.disk = 0;
+                return node;
+            }
+        }
+        if self.progress.cancelled.load(Ordering::Relaxed) {
+            return node;
+        }
+        let entries = match list(path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                node.flags.set(NodeFlags::ERROR);
+                node.errno = e.raw_os_error().unwrap_or(-1);
+                self.progress.errors.fetch_add(1, Ordering::Relaxed);
+                return node;
+            }
+        };
+        let mut subdirs = Vec::new();
+        for (child_name, stat) in entries {
+            let stat = match stat {
+                Ok(s) => s,
+                Err(errno) => {
+                    self.progress.errors.fetch_add(1, Ordering::Relaxed);
+                    node.children.push(RawNode::errored(child_name, errno));
+                    continue;
+                }
+            };
+            if stat.kind == NodeKind::Dir {
+                subdirs.push((child_name, stat));
+            } else {
+                let files = self.progress.files.fetch_add(1, Ordering::Relaxed);
+                if files.is_multiple_of(512) {
+                    self.progress.note_path(&path.join(&*child_name));
+                }
+                node.children.push(self.leaf(child_name, &stat));
+            }
+        }
+        let dirs: Vec<RawNode> = subdirs
+            .into_par_iter()
+            .map(|(n, s)| self.visit(&path.join(&*n), n, s, false))
+            .collect();
+        node.children.extend(dirs);
+        node
+    }
+
+    fn leaf(&self, name: Box<str>, stat: &Stat) -> RawNode {
         let mut flags = NodeFlags::default();
-        let mut disk = meta.blocks() * 512;
-        if cloud_only(meta) {
+        let mut disk = stat.alloc;
+        if stat.cloud_only {
             flags.set(NodeFlags::CLOUD_ONLY);
             disk = 0;
         }
-        if kind == NodeKind::File && meta.nlink() > 1 {
-            let key = (meta.dev(), meta.ino());
+        if stat.kind == NodeKind::File && stat.nlink > 1 {
             let first = self
                 .seen_inodes
                 .lock()
-                .map(|mut s| s.insert(key))
+                .map(|mut s| s.insert((stat.dev, stat.ino)))
                 .unwrap_or(true);
             if !first {
                 disk = 0;
@@ -368,15 +445,15 @@ impl Walker<'_> {
         self.progress.bytes.fetch_add(disk, Ordering::Relaxed);
         RawNode {
             name,
-            kind,
-            apparent: meta.len(),
+            kind: stat.kind,
+            apparent: stat.apparent,
             disk,
-            mtime: meta.mtime(),
-            atime: meta.atime(),
-            ino: meta.ino(),
-            dev: meta.dev(),
-            nlink: meta.nlink(),
-            uid: meta.uid(),
+            mtime: stat.mtime,
+            atime: stat.atime,
+            ino: stat.ino,
+            dev: stat.dev,
+            nlink: stat.nlink,
+            uid: stat.uid,
             flags,
             errno: 0,
             children: Vec::new(),
@@ -384,16 +461,24 @@ impl Walker<'_> {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn cloud_only(meta: &Metadata) -> bool {
-    use std::os::macos::fs::MetadataExt as _;
-    const SF_DATALESS: u32 = 0x4000_0000;
-    meta.st_flags() & SF_DATALESS != 0
-}
-
-#[cfg(not(target_os = "macos"))]
-fn cloud_only(_meta: &Metadata) -> bool {
-    false
+impl RawNode {
+    fn errored(name: Box<str>, errno: i32) -> Self {
+        RawNode {
+            name,
+            kind: NodeKind::Other,
+            apparent: 0,
+            disk: 0,
+            mtime: 0,
+            atime: 0,
+            ino: 0,
+            dev: 0,
+            nlink: 0,
+            uid: 0,
+            flags: NodeFlags(NodeFlags::ERROR),
+            errno,
+            children: Vec::new(),
+        }
+    }
 }
 
 fn flatten(raw: RawNode, parent: Option<u32>, depth: u16, out: &mut Vec<FlatNode>) -> usize {

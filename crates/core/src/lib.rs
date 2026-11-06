@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+pub mod bulk;
 pub mod categorise;
 pub mod changes;
 pub mod cleanup;

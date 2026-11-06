@@ -45,3 +45,11 @@ Deferred to v1.5 as the PRD suggests. `Docker.raw` is reported with apparent and
 ## Index write: deferred index builds did not help
 
 Measured on a 2M-node tree (2026-11-06): writing rows with the three node indexes live took 4.43 s. Dropping them for the insert and rebuilding afterwards took 4.47 s and 5.17 s, and a second scan into the same database rose to 10.2 s because the rebuild re-indexes every kept scan. The cost is per-row insert work (about 2.2 µs per row), not index maintenance, so the indexes stay live.
+
+## Walker: getattrlistbulk on macOS
+
+On macOS the walker lists each directory with `getattrlistbulk`, which returns names and attributes for a batch of entries per syscall, instead of `readdir` plus one `lstat` per entry. A filesystem without support falls back to the portable path.
+
+Measured on `~/.rustup` (162,674 files, warm cache, interleaved runs, 2026-11-06): walk 1,861 ms and 629 ms before, 443 ms and 235 ms after. `sys` time roughly halved. Files, dirs, allocated bytes, and apparent bytes are identical between the two walkers and match `du -sk` exactly.
+
+Two layout facts the man page does not make obvious, both covered by `bulk::tests`: the directory attribute group is packed only for directories and the file group only for non-directories, even with `FSOPT_PACK_INVAL_ATTRS`; and `ATTR_CMN_ERROR` sits immediately after the returned-attribute set, before the name.
