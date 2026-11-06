@@ -2188,8 +2188,11 @@ dependencies = [
  "serde",
  "serde_json",
  "spacehog-core",
+ "tempfile",
  "tokio",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
