@@ -19,6 +19,11 @@ impl Fixture {
     fn root(&self) -> PathBuf {
         fs::canonicalize(self.dir.path()).unwrap()
     }
+
+    /// Root can read the 0o000 directory, so its file becomes visible.
+    fn visible_files(&self) -> u64 {
+        self.files + u64::from(running_as_root())
+    }
 }
 
 impl Drop for Fixture {
@@ -80,10 +85,14 @@ fn walk_counts_files_hardlinks_symlinks_and_errors() {
         .collect();
     assert_eq!(
         files.len() as u64,
-        fx.files,
+        fx.visible_files(),
         "every regular file is recorded once per name"
     );
-    let apparent: u64 = files.iter().map(|n| n.apparent).sum();
+    let apparent: u64 = files
+        .iter()
+        .filter(|n| &*n.name != "secret")
+        .map(|n| n.apparent)
+        .sum();
     assert_eq!(
         apparent, fx.file_bytes,
         "apparent size counts each hardlink name"
@@ -146,7 +155,7 @@ fn index_round_trips_paths_and_totals() {
     let rec = scan_into(&fx.root(), &db, 5);
     assert_eq!(
         rec.files,
-        fx.files + 1,
+        fx.visible_files() + 1,
         "regular files plus the symlink, nothing behind EACCES"
     );
 
