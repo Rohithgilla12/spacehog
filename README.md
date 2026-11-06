@@ -7,7 +7,15 @@ spacehog is a disk-usage tool with two faces on one engine. The TUI shows where 
 It knows what `node_modules`, `target/`, `__pycache__`, Go build caches, Docker images, and Xcode DerivedData are. It knows whether each one can be regenerated and how stale the project that owns it is. Nothing leaves your machine: spacehog makes no network calls, and a test runs every command with the network denied to prove it.
 
 <!-- GIFs -->
-![spacehog overview](docs/overview.gif)
+![spacehog in 60 seconds: Overview, Explorer, Treemap, then an agent's proposal approved and cleaned](docs/demo.gif)
+
+Every recording runs against a synthetic home built by `scripts/demo-tree.sh`; regenerate them with `vhs docs/<name>.tape`.
+
+- [Overview](docs/overview.gif): totals, what is safe to free, buckets, and the largest offenders.
+- [Treemap](docs/treemap.gif): a squarified map of any folder; `enter` zooms in, `backspace` zooms out, `+`/`-` change depth.
+- [Categories](docs/categories.gif): every rule grouped by bucket with stale totals; select paths and queue them.
+- [Cleanup](docs/cleanup.gif): your queue and agents' proposals, approved and moved to the Trash with live progress and undo.
+- [Changes](docs/changes.gif): what grew and shrank between two scans.
 
 ## Install
 

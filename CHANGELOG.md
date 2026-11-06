@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### M5–M7 TUI: Cleanup, Treemap, Categories, Changes, and polish
+
+- Cleanup view with a Queue tab and a Proposals tab. Each item shows its size, bucket, safety class, regen hint, and why it is safe. `enter` approves an agent's proposal, `x` rejects it with a reason the agent reads back, `D` cleans now, `m` switches between Trash and permanent, and `u` undoes the last cleanup.
+- `D` re-validates the queue through `propose`, lists anything refused and why, asks about each `review` item, and in permanent mode waits until you type the exact total. The executor runs on its own thread; per-item results stream in as it journals them and a bytes-freed counter counts up.
+- `d` refuses protected items everywhere (Overview, Explorer, Treemap, Categories) and says why. Proposals refresh every 500 ms while Cleanup is open.
+- Treemap view: a squarified map on a half-block canvas with nested levels (`+`/`-`), labels on tiles of 8x2 cells or more, bucket colours, hover and selection, and a 150 ms zoom on `enter`/click and `backspace`. The Explorer preview draws through the same code.
+- Categories view: rules grouped by bucket with totals, item counts, and stale bytes; `enter` lists every matching path, `space`/`a` select, `s` shows only stale items, `d` queues the selection. The footer names the mix of safety classes.
+- Changes view (`spacehog --changes`): growth by bucket, the 30 paths that grew and shrank most, the kept scans, and `[`/`]` to pick an older baseline. With one scan kept it says to rescan later.
+- `theme = "light"` in config, `NO_COLOR` honoured with no colour attributes at all, mouse support (click to drill in, select, filter by donut segment or legend row; scroll wheel; treemap hover), and every view usable at 80x24.
+- Visual redesign: a solid half-block donut, headline figures for the total and what is safe to free (with its stale share), a stacked bar of safety classes, wide bars on a track in every list, an Explorer whose columns line up at any depth, and a full-screen scan view with a files/s area chart and the largest folders as they finish.
+- `scripts/demo-tree.sh` builds the synthetic home the GIFs record; `scripts/agent-propose.sh` files a proposal over MCP the way an agent would; `scripts/screenshots.sh` captures every view of an index with vhs.
+
 ### M6 scan diffing (core and CLI)
 
 - `spacehog changes [--since 7d|<scan id>]` reports growth per bucket and the paths that grew or shrank.
