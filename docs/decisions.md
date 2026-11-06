@@ -41,3 +41,7 @@ Rows store `stale_ref`, the unix time of last activity, not a day count. Day cou
 ## Docker breakdown
 
 Deferred to v1.5 as the PRD suggests. `Docker.raw` is reported with apparent and allocated sizes, since it is sparse.
+
+## Index write: deferred index builds did not help
+
+Measured on a 2M-node tree (2026-11-06): writing rows with the three node indexes live took 4.43 s. Dropping them for the insert and rebuilding afterwards took 4.47 s and 5.17 s, and a second scan into the same database rose to 10.2 s because the rebuild re-indexes every kept scan. The cost is per-row insert work (about 2.2 µs per row), not index maintenance, so the indexes stay live.
