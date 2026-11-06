@@ -1,0 +1,19 @@
+[package]
+name = "spacehog-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+crossterm = "0.29.0"
+ratatui = "0.30.2"
+spacehog-core = { version = "0.1.0", path = "../core" }
+throbber-widgets-tui = "0.11.1"
+tui-big-text = "0.8.10"
+tui-input = "0.15.5"
+tui-tree-widget = "0.24.1"
