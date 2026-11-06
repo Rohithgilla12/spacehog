@@ -161,10 +161,10 @@ Measured on an M-series MacBook (2026-11-06):
 | Tree | Files | Walk | Categorise | Index write | Peak RSS | `top --json` |
 |---|---|---|---|---|---|---|
 | `~/.rustup`, warm | 163k | 0.24 s | | | | |
-| projects folder, warm | 1.77M | 8.6 s | 0.33 s | 5.2 s | 681 MB | 7 ms |
+| projects folder, warm | 1.77M | 6.7–6.9 s | 0.32 s | 5.7 s | 695 MB | 10 ms |
 | whole `$HOME` | 15.6M | 72 s | 1.8 s | 62 s | 4.4 GB | 18 ms |
 
-The `$HOME` row ran while other builds were using the machine, so read it as an upper bound. On that home directory, 8.5% of bytes fell in `other`; everything else was categorised.
+The projects row is three first scans into a fresh index, each 13.0 to 13.5 s from start to a ready Overview. A rescan into an existing index took 16.1 s, because the write also compacts the previous scan of that folder. The `$HOME` row ran while other builds were using the machine, so read it as an upper bound. On that home directory, 8.5% of bytes fell in `other`; everything else was categorised.
 
 ## Licence
 
