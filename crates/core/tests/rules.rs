@@ -336,3 +336,29 @@ node-modules = "review"
         Safety::Protected
     );
 }
+
+#[test]
+fn the_documented_example_rules_load_and_apply() {
+    let home = PathBuf::from("/home/u");
+    let example = include_str!("../../../examples/rules.toml");
+    let rules =
+        RuleSet::from_sources(&[example, spacehog_core::rules::DEFAULT_RULES], &home).unwrap();
+    let unity = rules.get("unity-library").expect("example rule is loaded");
+    assert_eq!(unity.bucket.as_ref(), "dev-caches");
+    assert_eq!(
+        rules.effective_safety(
+            "/home/u/work/client-deliverables/x",
+            Some("js-dist"),
+            Some(Safety::Review)
+        ),
+        Safety::Protected
+    );
+    assert_eq!(
+        rules.effective_safety("/home/u/app/dist", Some("js-dist"), Some(Safety::Review)),
+        Safety::Regenerable
+    );
+    assert_eq!(
+        rules.effective_safety("/home/u/scratch/a", None, None),
+        Safety::Cache
+    );
+}

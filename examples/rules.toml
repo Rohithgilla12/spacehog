@@ -1,0 +1,15 @@
+protect = ["~/work/client-deliverables"]   # never cleaned, whatever matches inside
+allow = ["~/scratch"]                       # treated as cache
+
+[overrides]
+js-dist = "regenerable"                     # rule id -> safety class
+
+[[rule]]
+id = "unity-library"
+category = "dev-cache"
+label = "Unity Library cache"
+name = ["Library"]
+sibling = ["ProjectSettings"]
+safety = "regenerable"
+regen = "reopen the project in Unity"
+stale = "project"

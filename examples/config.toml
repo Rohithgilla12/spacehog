@@ -1,0 +1,15 @@
+default_root = "~"        # what bare `spacehog` scans first
+one_file_system = true    # stay on the root's filesystem
+theme = "dark"            # or "light"; NO_COLOR is respected
+icons = false             # Nerd Font icons
+stale_days = 90           # what "stale" means in summaries and the TUI
+keep_scans = 5            # scans kept per root for `changes`
+
+[mcp]
+auto_approve = []         # e.g. ["regenerable", "cache"]
+allow_review = false      # let agents propose review items idle under 30 days
+
+[cleanup]
+mode = "trash"            # or "permanent"
+max_bytes_per_execution = 100_000_000_000
+max_items = 500

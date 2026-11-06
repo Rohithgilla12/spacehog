@@ -109,13 +109,44 @@ impl Config {
 
     pub fn rules_path(&self) -> PathBuf {
         self.rules_path
-            .clone()
+            .as_deref()
+            .map(expand_home)
             .unwrap_or_else(|| crate::paths::config_dir().join("rules.toml"))
     }
 
     pub fn default_root(&self) -> PathBuf {
         self.default_root
-            .clone()
+            .as_deref()
+            .map(expand_home)
             .unwrap_or_else(crate::paths::home_dir)
+    }
+}
+
+/// Expands a leading `~` so config files can say `~/code`.
+pub fn expand_home(path: &Path) -> PathBuf {
+    match path.strip_prefix("~") {
+        Ok(rest) => crate::paths::home_dir().join(rest),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tilde_paths_expand_to_home() {
+        let c: Config = toml::from_str("default_root = \"~/code\"\nrules_path = \"~\"").unwrap();
+        assert_eq!(c.default_root(), crate::paths::home_dir().join("code"));
+        assert_eq!(c.rules_path(), crate::paths::home_dir());
+        let abs: Config = toml::from_str("default_root = \"/srv\"").unwrap();
+        assert_eq!(abs.default_root(), PathBuf::from("/srv"));
+    }
+
+    #[test]
+    fn the_documented_example_config_parses() {
+        let c: Config = toml::from_str(include_str!("../../../examples/config.toml")).unwrap();
+        assert_eq!(c.stale_days, 90);
+        assert_eq!(c.cleanup.max_items, 500);
     }
 }
