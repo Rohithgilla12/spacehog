@@ -143,3 +143,25 @@ pub fn proposals(list: &[Proposal]) {
         }
     }
 }
+
+pub fn changes(c: &spacehog_core::changes::Changes) {
+    println!(
+        "{} in {} since scan {}",
+        c.total_delta_human, c.root, c.from.id
+    );
+    for b in &c.buckets {
+        println!("  {:<15} {:>11}", b.label, b.delta_human);
+    }
+    if !c.grown.is_empty() {
+        println!("grew:");
+        for d in &c.grown {
+            println!("  {:>11}  {}", d.delta_human, d.path);
+        }
+    }
+    if !c.shrunk.is_empty() {
+        println!("shrank:");
+        for d in &c.shrunk {
+            println!("  {:>11}  {}", d.delta_human, d.path);
+        }
+    }
+}

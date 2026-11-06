@@ -1,4 +1,5 @@
 pub mod categorise;
+pub mod changes;
 pub mod cleanup;
 pub mod config;
 pub mod engine;

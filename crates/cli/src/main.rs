@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use spacehog_core::categorise::Categoriser;
+use spacehog_core::changes::{self, Since};
 use spacehog_core::config::Config;
 use spacehog_core::engine::{ScanRequest, run_scan_timed};
 use spacehog_core::proposals::ProposalStatus;
@@ -96,6 +97,16 @@ enum Command {
         /// Skip the confirmation prompt (not allowed with --permanent).
         #[arg(long, conflicts_with = "permanent")]
         yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// What grew or shrank between two scans of the same root.
+    Changes {
+        /// A duration (7d, 2w) or a scan id; defaults to the previous scan.
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
         #[arg(long)]
         json: bool,
     },
@@ -371,6 +382,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     json,
                 },
             );
+        }
+        Some(Command::Changes { since, limit, json }) => {
+            let index = Index::open_default()?;
+            let rules = load_rules(&config)?;
+            let since = match since {
+                None => Since::Previous,
+                Some(s) if s.chars().all(|c| c.is_ascii_digit()) => Since::Scan(s.parse()?),
+                Some(s) => Since::Ago(parse_days(&s).map_err(anyhow::Error::msg)? * 86_400),
+            };
+            let c = changes::changes(&index, &rules, None, since, limit)?;
+            if json {
+                output::json(&c)?;
+            } else {
+                output::changes(&c);
+            }
         }
         Some(Command::Undo { journal_id, json }) => {
             let index = Index::open_default()?;

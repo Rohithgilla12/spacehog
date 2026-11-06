@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### M6 scan diffing (core and CLI)
+
+- `spacehog changes [--since 7d|<scan id>]` reports growth per bucket and the paths that grew or shrank.
+- The diff only descends into directories whose totals moved, and reports a directory only when no single child explains 80% of its change, so growth points at `~/.cache/huggingface`, not `~`.
+- Compacted older scans are compared like for like: small unclaimed files are ignored on both sides.
+
 ### M5 cleanup and safety (core and CLI)
 
 - Executor in core shared by every surface: re-validates each item, re-stats it (inode, type, and size must match the index), then trashes or deletes it and journals the outcome to SQLite and `journal.jsonl`.

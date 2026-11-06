@@ -116,7 +116,7 @@ ALTER TABLE journal ADD COLUMN trashed_to TEXT;
 
 /// Older scans of a root keep only directories, claimed items, and files at
 /// least this large, which is enough for `changes` without storing every file N times.
-const COMPACT_MIN_FILE: i64 = 10 * 1024 * 1024;
+pub(crate) const COMPACT_MIN_FILE: i64 = 10 * 1024 * 1024;
 
 pub struct Index {
     pub(crate) conn: Connection,
@@ -533,6 +533,16 @@ impl Index {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn is_compacted(&self, scan: ScanId) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT compacted FROM scans WHERE id = ?1", [scan], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or(false))
     }
 
     pub fn connection(&self) -> &Connection {
