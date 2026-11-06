@@ -83,7 +83,7 @@ fn clock(d: Duration) -> String {
     format!("{:02}:{:02}", s / 60, s % 60)
 }
 
-fn count(n: u64) -> String {
+pub(crate) fn count(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {

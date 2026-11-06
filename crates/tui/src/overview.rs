@@ -313,7 +313,7 @@ fn render_hero(frame: &mut Frame, area: Rect, s: &OverviewState, f: &Env, tall: 
                 Line::styled(
                     format!(
                         "{} files · scanned {}",
-                        f.snap.scan.files,
+                        crate::scanning::count(f.snap.scan.files),
                         f.snap.scan.finished_at.map_or("never".into(), data::ago)
                     ),
                     t.dim(),
