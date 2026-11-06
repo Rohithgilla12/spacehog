@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::error::Result;
 use crate::index::Index;
 use crate::lock::ScanLock;
 use crate::model::{Label, ScanId, ScanRecord};
-use crate::scan::{self, Progress, ScanOptions, ScanTree};
+use crate::scan::{self, Phase, Progress, ScanOptions, ScanTree};
 
 /// Labels a freshly scanned tree before it is written. The categoriser
 /// implements this; a scan without one is written uncategorised.
@@ -14,15 +14,15 @@ pub trait Labeler: Send + Sync {
     fn label(&self, tree: &ScanTree) -> Vec<Label>;
 }
 
-pub struct ScanRequest<'a> {
+pub struct ScanRequest {
     pub options: ScanOptions,
     pub db: PathBuf,
     pub lock_dir: PathBuf,
     pub keep: usize,
-    pub labeler: Option<&'a dyn Labeler>,
+    pub labeler: Option<Arc<dyn Labeler>>,
 }
 
-impl ScanRequest<'_> {
+impl ScanRequest {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             options: ScanOptions::new(root),
@@ -34,8 +34,6 @@ impl ScanRequest<'_> {
     }
 }
 
-/// Takes the scan lock, walks, labels, and writes the tree. Progress is
-/// mirrored into the `scans` row every 250 ms so other processes can read it.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ScanTimings {
     pub walk_ms: u64,
@@ -44,24 +42,43 @@ pub struct ScanTimings {
     pub nodes: u64,
 }
 
-pub fn run_scan(req: &ScanRequest<'_>, progress: Arc<Progress>) -> Result<ScanRecord> {
-    run_scan_timed(req, progress).map(|(r, _)| r)
+pub type ScanOutcome = (ScanRecord, ScanTimings);
+
+/// A scan running on a background thread. The id is known up front so
+/// callers can report it before the walk finishes.
+pub struct ScanJob {
+    pub scan_id: ScanId,
+    pub root: PathBuf,
+    pub progress: Arc<Progress>,
+    handle: std::thread::JoinHandle<Result<ScanOutcome>>,
 }
 
-pub fn run_scan_timed(
-    req: &ScanRequest<'_>,
-    progress: Arc<Progress>,
-) -> Result<(ScanRecord, ScanTimings)> {
-    let mut timings = ScanTimings::default();
-    let mut clock = std::time::Instant::now();
-    let mut lap = |slot: &mut u64| {
-        *slot = clock.elapsed().as_millis() as u64;
-        clock = std::time::Instant::now();
-    };
+impl ScanJob {
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+
+    pub fn join(self) -> Result<ScanOutcome> {
+        self.handle
+            .join()
+            .unwrap_or_else(|_| Err(crate::Error::Invalid("scan thread panicked".into())))
+    }
+}
+
+struct Started {
+    index: Index,
+    scan_id: ScanId,
+    lock: ScanLock,
+    options: ScanOptions,
+}
+
+/// Opens the index, records the scan, and takes the lock. A held lock fails
+/// here, before any thread is spawned.
+fn start(req: &ScanRequest) -> Result<Started> {
     let root = std::fs::canonicalize(&req.options.root)?;
-    let mut index = Index::open(&req.db)?;
+    let index = Index::open(&req.db)?;
     let scan_id = index.begin_scan(&root)?;
-    let _lock = match ScanLock::acquire(&req.lock_dir, scan_id) {
+    let lock = match ScanLock::acquire(&req.lock_dir, scan_id) {
         Ok(l) => l,
         Err(e) => {
             index.fail_scan(scan_id, &e.to_string())?;
@@ -70,27 +87,82 @@ pub fn run_scan_timed(
     };
     let mut options = req.options.clone();
     options.root = root;
+    Ok(Started {
+        index,
+        scan_id,
+        lock,
+        options,
+    })
+}
+
+/// Walks, labels, and writes. Progress is mirrored into the `scans` row
+/// every 250 ms so other processes can read it.
+fn body(req: &ScanRequest, started: Started, progress: Arc<Progress>) -> Result<ScanOutcome> {
+    let Started {
+        mut index,
+        scan_id,
+        lock,
+        options,
+    } = started;
+    let _lock = lock;
+    let mut timings = ScanTimings::default();
+    let mut clock = Instant::now();
+    let mut lap = |slot: &mut u64| {
+        *slot = clock.elapsed().as_millis() as u64;
+        clock = Instant::now();
+    };
     let mirror = spawn_mirror(req.db.clone(), scan_id, progress.clone());
-    lap(&mut 0);
     let walked = scan::scan(&options, &progress);
-    progress
-        .done
-        .store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = mirror.join();
     lap(&mut timings.walk_ms);
     let tree = match walked {
         Ok(t) => t,
         Err(e) => {
+            progress.set_phase(Phase::Done);
+            let _ = mirror.join();
             index.fail_scan(scan_id, &e.to_string())?;
             return Err(e.into());
         }
     };
-    let labels = req.labeler.map(|l| l.label(&tree));
+    progress.set_phase(Phase::Labelling);
+    let labels = req.labeler.as_ref().map(|l| l.label(&tree));
     lap(&mut timings.label_ms);
     timings.nodes = tree.nodes.len() as u64;
-    index.finish_scan(scan_id, &tree, labels.as_deref(), req.keep)?;
+    progress.set_phase(Phase::Writing);
+    let written = index.finish_scan(scan_id, &tree, labels.as_deref(), req.keep, Some(&progress));
+    progress.set_phase(Phase::Done);
+    let _ = mirror.join();
+    if let Err(e) = written {
+        index.fail_scan(scan_id, &e.to_string())?;
+        return Err(e);
+    }
     lap(&mut timings.write_ms);
     Ok((index.scan(scan_id)?.expect("scan row exists"), timings))
+}
+
+pub fn run_scan(req: &ScanRequest, progress: Arc<Progress>) -> Result<ScanRecord> {
+    run_scan_timed(req, progress).map(|(r, _)| r)
+}
+
+pub fn run_scan_timed(req: &ScanRequest, progress: Arc<Progress>) -> Result<ScanOutcome> {
+    let started = start(req)?;
+    body(req, started, progress)
+}
+
+pub fn spawn_scan(req: ScanRequest) -> Result<ScanJob> {
+    let started = start(&req)?;
+    let scan_id = started.scan_id;
+    let root = started.options.root.clone();
+    let progress = Arc::new(Progress::default());
+    let p = progress.clone();
+    let handle = std::thread::Builder::new()
+        .name(format!("scan-{scan_id}"))
+        .spawn(move || body(&req, started, p))?;
+    Ok(ScanJob {
+        scan_id,
+        root,
+        progress,
+        handle,
+    })
 }
 
 fn spawn_mirror(
@@ -100,7 +172,7 @@ fn spawn_mirror(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let Ok(index) = Index::open(&db) else { return };
-        while !progress.done.load(std::sync::atomic::Ordering::Relaxed) {
+        while progress.phase() != Phase::Done {
             let _ = index.update_progress(scan_id, &progress.snapshot());
             std::thread::sleep(Duration::from_millis(250));
         }

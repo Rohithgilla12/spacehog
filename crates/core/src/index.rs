@@ -192,6 +192,7 @@ impl Index {
         tree: &ScanTree,
         labels: Option<&[Label]>,
         keep: usize,
+        progress: Option<&crate::scan::Progress>,
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let base: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM nodes", [], |r| {
@@ -208,6 +209,10 @@ impl Index {
             )?;
             let empty = Label::default();
             for (i, n) in tree.nodes.iter().enumerate() {
+                if let Some(p) = progress.filter(|_| i % 65_536 == 0) {
+                    p.written
+                        .store(i as u64, std::sync::atomic::Ordering::Relaxed);
+                }
                 let label = labels.and_then(|l| l.get(i)).unwrap_or(&empty);
                 stmt.execute(params![
                     base + i as i64,

@@ -103,11 +103,11 @@ pub fn home() -> (tempfile::TempDir, PathBuf) {
 
 pub fn scan(h: &Path, state: &Path) -> (Index, Arc<RuleSet>, i64) {
     let rules = Arc::new(RuleSet::default_rules(h).unwrap());
-    let cat = Categoriser::new(rules.clone());
+    let cat = Arc::new(Categoriser::new(rules.clone()));
     let mut req = ScanRequest::new(h);
     req.db = state.join("index.db");
     req.lock_dir = state.to_path_buf();
-    req.labeler = Some(&cat);
+    req.labeler = Some(cat);
     let rec = run_scan(&req, Arc::new(Progress::default())).unwrap();
     (Index::open(&req.db).unwrap(), rules, rec.id)
 }

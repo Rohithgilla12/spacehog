@@ -222,19 +222,17 @@ fn run(cli: Cli) -> Result<ExitCode> {
             json,
         }) => {
             let root = path.unwrap_or_else(|| config.default_root());
-            let categoriser = Categoriser::new(Arc::new(load_rules(&config)?));
+            let categoriser = Arc::new(Categoriser::new(Arc::new(load_rules(&config)?)));
             let mut req = ScanRequest::new(root);
             req.options.one_file_system = config.one_file_system && !all_filesystems;
             req.keep = config.keep_scans;
-            req.labeler = Some(&categoriser);
+            req.labeler = Some(categoriser);
             let progress = Arc::new(Progress::default());
             let started = Instant::now();
             let show = !json && std::io::stderr().is_terminal();
             let ticker = show.then(|| spawn_ticker(progress.clone()));
             let result = run_scan_timed(&req, progress.clone());
-            progress
-                .done
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            progress.set_phase(spacehog_core::scan::Phase::Done);
             if let Some(t) = ticker {
                 let _ = t.join();
             }
@@ -355,15 +353,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
 fn spawn_ticker(progress: Arc<Progress>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        while !progress.done.load(std::sync::atomic::Ordering::Relaxed) {
+        use spacehog_core::scan::Phase;
+        while progress.phase() != Phase::Done {
             let p = progress.snapshot();
-            eprint!(
-                "\r\x1b[2K{} files  {} dirs  {}  {}",
-                p.files,
-                p.dirs,
-                human::bytes(p.bytes),
-                output::truncate_middle(&p.current_path, 60)
-            );
+            match p.phase {
+                Phase::Walking => eprint!(
+                    "\r\x1b[2K{} files  {} dirs  {}  {}",
+                    p.files,
+                    p.dirs,
+                    human::bytes(p.bytes),
+                    output::truncate_middle(&p.current_path, 60)
+                ),
+                Phase::Labelling => eprint!("\r\x1b[2Kcategorising {} files", p.files),
+                Phase::Writing => eprint!(
+                    "\r\x1b[2Kindexing {} / {} rows",
+                    p.written,
+                    p.files + p.dirs
+                ),
+                Phase::Done => {}
+            }
             std::thread::sleep(Duration::from_millis(100));
         }
         eprint!("\r\x1b[2K");

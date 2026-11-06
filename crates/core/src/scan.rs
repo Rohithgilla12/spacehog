@@ -3,7 +3,7 @@ use std::fs::{self, Metadata};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
@@ -57,9 +57,21 @@ pub struct Progress {
     pub dirs: AtomicU64,
     pub bytes: AtomicU64,
     pub errors: AtomicU64,
-    pub done: AtomicBool,
+    /// Rows written to the index so far, during `Phase::Writing`.
+    pub written: AtomicU64,
     pub cancelled: AtomicBool,
+    phase: AtomicU8,
     current: Mutex<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phase {
+    #[default]
+    Walking,
+    Labelling,
+    Writing,
+    Done,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -69,7 +81,8 @@ pub struct ProgressSnapshot {
     pub bytes: u64,
     pub errors: u64,
     pub current_path: String,
-    pub done: bool,
+    pub written: u64,
+    pub phase: Phase,
 }
 
 impl Progress {
@@ -80,8 +93,28 @@ impl Progress {
             bytes: self.bytes.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             current_path: self.current.lock().map(|s| s.clone()).unwrap_or_default(),
-            done: self.done.load(Ordering::Relaxed),
+            written: self.written.load(Ordering::Relaxed),
+            phase: self.phase(),
         }
+    }
+
+    pub fn phase(&self) -> Phase {
+        match self.phase.load(Ordering::Relaxed) {
+            0 => Phase::Walking,
+            1 => Phase::Labelling,
+            2 => Phase::Writing,
+            _ => Phase::Done,
+        }
+    }
+
+    pub fn set_phase(&self, phase: Phase) {
+        let v = match phase {
+            Phase::Walking => 0,
+            Phase::Labelling => 1,
+            Phase::Writing => 2,
+            Phase::Done => 3,
+        };
+        self.phase.store(v, Ordering::Relaxed);
     }
 
     pub fn cancel(&self) {
@@ -222,7 +255,6 @@ pub fn scan(opts: &ScanOptions, progress: &Progress) -> std::io::Result<ScanTree
         seen_inodes: Mutex::new(HashSet::new()),
     };
     let raw = walker.visit(&root, root.to_string_lossy().into(), meta, true);
-    progress.done.store(true, Ordering::Relaxed);
     let mut nodes = Vec::with_capacity(progress.files.load(Ordering::Relaxed) as usize + 1024);
     flatten(raw, None, 0, &mut nodes);
     Ok(ScanTree { root, nodes })
