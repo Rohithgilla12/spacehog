@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, DeleteMode};
@@ -267,7 +267,7 @@ impl Index {
             Actor::Agent => "agent".into(),
             Actor::User => "you".into(),
         });
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO proposals (id, scan_id, created_at, updated_at, agent, rationale, mode, status,
                 total_bytes, total_human)

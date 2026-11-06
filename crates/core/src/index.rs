@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
 
 use crate::error::Result;
 use crate::model::{
@@ -156,7 +156,9 @@ impl Index {
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-            let tx = self.conn.transaction()?;
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute_batch(sql)?;
             tx.pragma_update(None, "user_version", i as i64 + 1)?;
             tx.commit()?;
@@ -210,7 +212,9 @@ impl Index {
         keep: usize,
         progress: Option<&crate::scan::Progress>,
     ) -> Result<()> {
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let base: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) + 1 FROM nodes", [], |r| {
             r.get(0)
         })?;
@@ -301,7 +305,9 @@ impl Index {
             stmt.query_map([&root], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<std::result::Result<_, _>>()?
         };
-        let tx = self.conn.transaction()?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (i, (id, compacted)) in ids.into_iter().enumerate() {
             if i >= keep.max(1) {
                 tx.execute("DELETE FROM nodes WHERE scan_id = ?1", [id])?;
@@ -503,7 +509,7 @@ impl Index {
             sign * n.apparent_size as i64,
             sign * n.file_count as i64,
         );
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
         let flag_sql = if deleting {
             "UPDATE nodes SET flags = flags | ?3 WHERE id BETWEEN ?1 AND ?2"
         } else {
