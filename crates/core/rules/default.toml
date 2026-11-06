@@ -1,0 +1,871 @@
+# spacehog default rules.
+#
+# Rules are evaluated top-down for every directory and every file not already
+# inside a claimed subtree. The first rule whose matchers all hold claims the
+# node. A claim stops descent unless the rule sets `fallback = true`, in which
+# case deeper rules may still carve out nested claims.
+#
+# Matchers (all that are present must hold; values inside one matcher are OR):
+#   name     globs against the node name
+#   path     globs against the absolute path; `~` and `$VAR` are expanded,
+#            `*` stays within one path component, `**` crosses components
+#   ext      file extensions, case-insensitive
+#   kind     "dir" (default), "file", or "any"; `ext` implies "file"
+#   sibling  globs; one must exist next to the node
+#   contains globs; one must exist directly inside the node
+#
+# stale = "project" measures staleness from the owning project (the parent
+# dir, its manifest files, and .git/HEAD); "self" uses the newest mtime in the
+# subtree; "none" never reports staleness.
+
+[[bucket]]
+id = "dev-caches"
+label = "Dev caches"
+colour = "#ff79c6"
+
+[[bucket]]
+id = "dev-builds"
+label = "Dev builds"
+colour = "#bd93f9"
+
+[[bucket]]
+id = "dev-envs"
+label = "Dev envs"
+colour = "#8be9fd"
+
+[[bucket]]
+id = "pkg-caches"
+label = "Package caches"
+colour = "#50fa7b"
+
+[[bucket]]
+id = "toolchains"
+label = "Toolchains"
+colour = "#f1fa8c"
+
+[[bucket]]
+id = "docker-vms"
+label = "Docker/VMs"
+colour = "#6fa8ff"
+
+[[bucket]]
+id = "ml-models"
+label = "ML models"
+colour = "#ffb86c"
+
+[[bucket]]
+id = "app-caches"
+label = "App caches"
+colour = "#a4ffd6"
+
+[[bucket]]
+id = "app-data"
+label = "App data"
+colour = "#d7a6ff"
+
+[[bucket]]
+id = "apps"
+label = "Apps"
+colour = "#ff6e6e"
+
+[[bucket]]
+id = "logs"
+label = "Logs"
+colour = "#c3a88a"
+
+[[bucket]]
+id = "trash"
+label = "Trash"
+colour = "#9aa0b4"
+
+[[bucket]]
+id = "downloads"
+label = "Downloads"
+colour = "#ffd479"
+
+[[bucket]]
+id = "media"
+label = "Media"
+colour = "#ff92df"
+
+[[bucket]]
+id = "archives"
+label = "Archives"
+colour = "#e0c27a"
+
+[[bucket]]
+id = "projects"
+label = "Projects"
+colour = "#9ece6a"
+
+[[bucket]]
+id = "user-data"
+label = "User data"
+colour = "#7aa2f7"
+
+[[bucket]]
+id = "vcs"
+label = "VCS"
+colour = "#f78c6c"
+
+[[bucket]]
+id = "other"
+label = "Other"
+colour = "#6272a4"
+
+[categories]
+dev-cache = "dev-caches"
+dev-build = "dev-builds"
+dev-env = "dev-envs"
+pkg-cache = "pkg-caches"
+toolchain = "toolchains"
+docker = "docker-vms"
+vm = "docker-vms"
+ml-models = "ml-models"
+cache = "app-caches"
+app-data = "app-data"
+apps = "apps"
+logs = "logs"
+trash = "trash"
+downloads = "downloads"
+installers = "downloads"
+media-video = "media"
+media-images = "media"
+media-audio = "media"
+archives = "archives"
+disk-images = "archives"
+user-data = "user-data"
+project = "projects"
+mail = "user-data"
+messages = "user-data"
+device-backups = "user-data"
+vcs = "vcs"
+other = "other"
+
+# Containers and VMs
+
+[[rule]]
+id = "docker-desktop-disk"
+category = "docker"
+label = "Docker Desktop disk image"
+path = ["~/Library/Containers/com.docker.docker/Data/vms/*/data/Docker.raw"]
+kind = "file"
+safety = "review"
+regen = "docker system df; docker system prune"
+stale = "none"
+
+[[rule]]
+id = "docker-desktop"
+category = "docker"
+label = "Docker Desktop data"
+path = ["~/Library/Containers/com.docker.docker"]
+safety = "review"
+regen = "docker system df; docker system prune"
+stale = "none"
+fallback = true
+
+[[rule]]
+id = "docker-linux"
+category = "docker"
+label = "Docker data"
+path = ["/var/lib/docker"]
+safety = "review"
+regen = "docker system df; docker system prune"
+stale = "none"
+
+[[rule]]
+id = "vm-images"
+category = "vm"
+label = "VM images"
+path = ["~/.colima", "~/.lima", "~/.orbstack", "~/Library/Containers/com.utmapp.UTM", "~/Parallels", "~/VirtualBox VMs", "~/Library/Group Containers/HUAQ24HBR6.dev.orbstack"]
+safety = "review"
+regen = "delete VMs from the VM tool itself"
+stale = "self"
+
+[[rule]]
+id = "kube-cache"
+category = "dev-cache"
+label = "Kubernetes caches"
+path = ["~/.minikube", "~/.kube/cache"]
+safety = "regenerable"
+regen = "minikube delete; kubectl re-fetches discovery caches"
+stale = "self"
+
+# Version control
+
+[[rule]]
+id = "git-lfs"
+category = "vcs"
+label = "Git LFS objects"
+name = ["lfs"]
+path = ["**/.git/lfs"]
+safety = "review"
+regen = "git lfs prune"
+stale = "project"
+
+[[rule]]
+id = "git"
+category = "vcs"
+label = "Git repository data"
+name = [".git"]
+safety = "protected"
+regen = "git gc --aggressive (advice only)"
+stale = "none"
+fallback = true
+
+# Specific home-directory caches. These precede the catch-alls below.
+
+[[rule]]
+id = "cache-roots"
+category = "cache"
+label = "Cache directory"
+path = ["~/.cache", "~/Library/Caches"]
+safety = "cache"
+regen = "rebuilt by the tools that own each entry"
+stale = "self"
+fallback = true
+
+[[rule]]
+id = "npm-cache"
+category = "pkg-cache"
+label = "npm cache"
+path = ["~/.npm/_cacache", "~/.npm/_npx"]
+safety = "cache"
+regen = "re-downloaded on install (npm cache clean --force)"
+stale = "self"
+
+[[rule]]
+id = "pnpm-store"
+category = "pkg-cache"
+label = "pnpm store"
+path = ["~/Library/Caches/pnpm", "~/.local/share/pnpm/store", "~/Library/pnpm/store", "~/.pnpm-store"]
+safety = "cache"
+regen = "re-downloaded on install (pnpm store prune)"
+stale = "self"
+
+[[rule]]
+id = "yarn-cache"
+category = "pkg-cache"
+label = "Yarn cache"
+path = ["~/.yarn/berry/cache", "~/Library/Caches/Yarn", "~/.cache/yarn"]
+safety = "cache"
+regen = "re-downloaded on install (yarn cache clean)"
+stale = "self"
+
+[[rule]]
+id = "bun-cache"
+category = "pkg-cache"
+label = "Bun install cache"
+path = ["~/.bun/install/cache"]
+safety = "cache"
+regen = "re-downloaded on install (bun pm cache rm)"
+stale = "self"
+
+[[rule]]
+id = "js-tool-caches"
+category = "pkg-cache"
+label = "Browser and TS tool caches"
+path = ["~/.cache/typescript", "~/Library/Caches/typescript", "~/.cache/ms-playwright", "~/Library/Caches/ms-playwright", "~/.cache/puppeteer", "~/.cache/Cypress", "~/Library/Caches/Cypress"]
+safety = "cache"
+regen = "re-downloaded on next install or test run"
+stale = "self"
+
+[[rule]]
+id = "pip-cache"
+category = "pkg-cache"
+label = "pip cache"
+path = ["~/.cache/pip", "~/Library/Caches/pip"]
+safety = "cache"
+regen = "re-downloaded on install (pip cache purge)"
+stale = "self"
+
+[[rule]]
+id = "uv-cache"
+category = "pkg-cache"
+label = "uv cache"
+path = ["~/.cache/uv", "~/Library/Caches/uv"]
+safety = "cache"
+regen = "re-downloaded on install (uv cache clean)"
+stale = "self"
+
+[[rule]]
+id = "poetry-cache"
+category = "pkg-cache"
+label = "Poetry cache"
+path = ["~/.cache/pypoetry", "~/Library/Caches/pypoetry"]
+safety = "cache"
+regen = "re-downloaded on install (poetry cache clear --all .)"
+stale = "self"
+
+[[rule]]
+id = "conda-pkgs"
+category = "pkg-cache"
+label = "Conda package cache"
+path = ["~/.conda/pkgs", "~/miniconda3/pkgs", "~/anaconda3/pkgs", "~/miniforge3/pkgs"]
+safety = "cache"
+regen = "conda clean --all"
+stale = "self"
+
+[[rule]]
+id = "pyenv-versions"
+category = "toolchain"
+label = "pyenv Python versions"
+path = ["~/.pyenv/versions/*"]
+safety = "review"
+regen = "pyenv uninstall <version>"
+stale = "self"
+
+[[rule]]
+id = "go-mod-cache"
+category = "pkg-cache"
+label = "Go module cache"
+path = ["$GOMODCACHE", "~/go/pkg/mod"]
+safety = "cache"
+regen = "go mod download (go clean -modcache)"
+stale = "self"
+
+[[rule]]
+id = "go-build-cache"
+category = "dev-cache"
+label = "Go build cache"
+path = ["$GOCACHE", "~/Library/Caches/go-build", "~/.cache/go-build"]
+safety = "regenerable"
+regen = "go build (go clean -cache)"
+stale = "self"
+
+[[rule]]
+id = "go-bin"
+category = "toolchain"
+label = "Go installed binaries"
+path = ["~/go/bin"]
+safety = "review"
+regen = "go install <pkg>@latest"
+stale = "self"
+
+[[rule]]
+id = "cargo-registry"
+category = "pkg-cache"
+label = "Cargo registry and git cache"
+path = ["~/.cargo/registry", "~/.cargo/git"]
+safety = "cache"
+regen = "re-downloaded on build (cargo cache --autoclean)"
+stale = "self"
+
+[[rule]]
+id = "rustup-toolchains"
+category = "toolchain"
+label = "Rust toolchains"
+path = ["~/.rustup/toolchains/*"]
+safety = "review"
+regen = "rustup toolchain list; rustup toolchain uninstall <name>"
+stale = "self"
+
+[[rule]]
+id = "gradle-home"
+category = "pkg-cache"
+label = "Gradle caches"
+path = ["~/.gradle/caches", "~/.gradle/wrapper/dists"]
+safety = "cache"
+regen = "re-downloaded on build"
+stale = "self"
+
+[[rule]]
+id = "maven-repo"
+category = "pkg-cache"
+label = "Maven repository"
+path = ["~/.m2/repository"]
+safety = "cache"
+regen = "re-downloaded on build"
+stale = "self"
+
+[[rule]]
+id = "xcode-derived-data"
+category = "dev-cache"
+label = "Xcode DerivedData"
+path = ["~/Library/Developer/Xcode/DerivedData"]
+safety = "regenerable"
+regen = "rebuilt by Xcode on next build"
+stale = "self"
+
+[[rule]]
+id = "xcode-device-support"
+category = "dev-cache"
+label = "Xcode device support"
+path = ["~/Library/Developer/Xcode/iOS DeviceSupport", "~/Library/Developer/Xcode/watchOS DeviceSupport", "~/Library/Developer/Xcode/tvOS DeviceSupport", "~/Library/Developer/Xcode/visionOS DeviceSupport"]
+safety = "review"
+regen = "re-copied when a device connects"
+stale = "self"
+
+[[rule]]
+id = "simulator-caches"
+category = "dev-cache"
+label = "Simulator caches"
+path = ["~/Library/Developer/CoreSimulator/Caches"]
+safety = "review"
+regen = "xcrun simctl delete unavailable"
+stale = "self"
+
+[[rule]]
+id = "simulator-devices"
+category = "dev-cache"
+label = "Simulator devices"
+path = ["~/Library/Developer/CoreSimulator/Devices"]
+safety = "review"
+regen = "xcrun simctl delete unavailable (simulators may hold app data)"
+stale = "self"
+
+[[rule]]
+id = "xcode-archives"
+category = "dev-build"
+label = "Xcode archives"
+path = ["~/Library/Developer/Xcode/Archives"]
+safety = "review"
+regen = "re-archive from source; archives may hold shipped builds and dSYMs"
+stale = "self"
+
+[[rule]]
+id = "android-images"
+category = "toolchain"
+label = "Android system images and AVDs"
+path = ["~/Library/Android/sdk/system-images", "~/.android/avd"]
+safety = "review"
+regen = "sdkmanager / AVD manager"
+stale = "self"
+
+[[rule]]
+id = "terraform-plugin-cache"
+category = "dev-cache"
+label = "Terraform plugin cache"
+path = ["~/.terraform.d/plugin-cache"]
+safety = "regenerable"
+regen = "terraform init"
+stale = "self"
+
+[[rule]]
+id = "pub-cache"
+category = "pkg-cache"
+label = "Dart pub cache"
+path = ["~/.pub-cache"]
+safety = "cache"
+regen = "dart pub get"
+stale = "self"
+
+[[rule]]
+id = "hf-models"
+category = "ml-models"
+label = "Hugging Face model"
+path = ["~/.cache/huggingface/hub/models--*", "~/.cache/huggingface/hub/datasets--*"]
+safety = "review"
+regen = "re-downloaded from the Hugging Face Hub on next use"
+stale = "self"
+
+[[rule]]
+id = "ml-caches"
+category = "ml-models"
+label = "ML model store"
+path = ["~/.cache/huggingface", "~/.cache/torch", "~/.ollama/models", "~/.lmstudio/models", "~/.cache/lm-studio/models", "~/Library/Caches/llama.cpp"]
+safety = "review"
+regen = "re-downloaded by the tool (ollama pull / lms get)"
+stale = "self"
+fallback = true
+
+[[rule]]
+id = "homebrew-cache"
+category = "cache"
+label = "Homebrew cache"
+path = ["~/Library/Caches/Homebrew"]
+safety = "cache"
+regen = "brew cleanup --prune=all"
+stale = "self"
+
+[[rule]]
+id = "xcode-cache"
+category = "cache"
+label = "Xcode cache"
+path = ["~/Library/Caches/com.apple.dt.Xcode"]
+safety = "cache"
+regen = "rebuilt by Xcode"
+stale = "self"
+
+[[rule]]
+id = "jetbrains-cache"
+category = "cache"
+label = "JetBrains caches"
+path = ["~/Library/Caches/JetBrains/*", "~/.cache/JetBrains/*"]
+safety = "cache"
+regen = "rebuilt by the IDE (File > Invalidate Caches)"
+stale = "self"
+
+[[rule]]
+id = "editor-caches"
+category = "cache"
+label = "Editor caches"
+path = [
+  "~/Library/Application Support/Code/Cache*",
+  "~/Library/Application Support/Code/CachedData",
+  "~/Library/Application Support/Code/CachedExtensionVSIXs",
+  "~/Library/Application Support/Code/Service Worker/CacheStorage",
+  "~/Library/Application Support/Cursor/Cache*",
+  "~/Library/Application Support/Cursor/CachedData",
+  "~/Library/Application Support/Cursor/CachedExtensionVSIXs",
+  "~/Library/Caches/Zed",
+  "~/Library/Caches/dev.zed.Zed",
+  "~/.config/Code/Cache*",
+  "~/.config/Code/CachedData",
+]
+safety = "cache"
+regen = "rebuilt by the editor"
+stale = "self"
+
+[[rule]]
+id = "vscode-workspace-storage"
+category = "cache"
+label = "Editor workspace storage"
+path = ["~/Library/Application Support/Code/User/workspaceStorage", "~/Library/Application Support/Cursor/User/workspaceStorage"]
+safety = "review"
+regen = "recreated per workspace; holds per-workspace extension state"
+stale = "self"
+
+[[rule]]
+id = "apple-caches"
+category = "cache"
+label = "Apple system caches"
+path = ["~/Library/Caches/com.apple.*", "~/Library/Caches/CloudKit"]
+safety = "review"
+regen = "rebuilt by macOS"
+stale = "self"
+
+[[rule]]
+id = "group-container-caches"
+category = "cache"
+label = "App group caches"
+path = ["~/Library/Group Containers/*/Library/Caches"]
+safety = "cache"
+regen = "rebuilt by the app"
+stale = "self"
+
+[[rule]]
+id = "logs"
+category = "logs"
+label = "Logs"
+path = ["~/Library/Logs", "/Library/Logs", "/var/log", "/private/var/log"]
+safety = "cache"
+regen = "rewritten by apps"
+stale = "self"
+
+[[rule]]
+id = "trash"
+category = "trash"
+label = "Trash"
+path = ["~/.Trash", "~/.local/share/Trash"]
+safety = "cache"
+regen = "emptying the Trash is permanent"
+stale = "self"
+
+[[rule]]
+id = "mail"
+category = "mail"
+label = "Mail"
+path = ["~/Library/Mail"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "messages"
+category = "messages"
+label = "Messages"
+path = ["~/Library/Messages"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "device-backups"
+category = "device-backups"
+label = "iOS device backups"
+path = ["~/Library/Application Support/MobileSync/Backup/*"]
+safety = "review"
+regen = "manage in Finder > device > Manage Backups"
+stale = "self"
+
+[[rule]]
+id = "app-support"
+category = "app-data"
+label = "Application data"
+path = ["~/Library/Application Support/*", "~/Library/Containers/*", "~/Library/Group Containers/*"]
+safety = "protected"
+stale = "none"
+fallback = true
+
+[[rule]]
+id = "applications"
+category = "apps"
+label = "Applications"
+path = ["/Applications/*.app", "~/Applications/*.app"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "dot-cache"
+category = "cache"
+label = "Tool cache"
+path = ["~/.cache/*"]
+safety = "cache"
+regen = "rebuilt by the tool that owns it"
+stale = "self"
+
+[[rule]]
+id = "library-caches"
+category = "cache"
+label = "App cache"
+path = ["~/Library/Caches/*"]
+safety = "cache"
+regen = "rebuilt by the app that owns it"
+stale = "self"
+
+# User content. Fallback rules so projects kept inside them still get
+# their dev artefacts categorised.
+
+[[rule]]
+id = "installers"
+category = "installers"
+label = "Installers and archives in Downloads"
+path = ["~/Downloads/**"]
+ext = ["dmg", "pkg", "zip", "iso", "msi", "exe", "xip"]
+safety = "review"
+regen = "re-download from the vendor"
+stale = "self"
+
+[[rule]]
+id = "downloads"
+category = "downloads"
+label = "Downloads"
+path = ["~/Downloads"]
+safety = "review"
+stale = "self"
+fallback = true
+
+[[rule]]
+id = "user-folders"
+category = "user-data"
+label = "User folders"
+path = ["~/Desktop", "~/Documents", "~/Pictures", "~/Movies", "~/Music"]
+safety = "protected"
+stale = "none"
+fallback = true
+
+# Project artefacts matched by name anywhere.
+
+[[rule]]
+id = "node-modules"
+category = "dev-cache"
+label = "node_modules"
+name = ["node_modules"]
+sibling = ["package.json"]
+safety = "regenerable"
+regen = "npm i"
+regen_cmd = [
+  { sibling = "pnpm-lock.yaml", cmd = "pnpm i" },
+  { sibling = "yarn.lock", cmd = "yarn" },
+  { sibling = "bun.lockb", cmd = "bun i" },
+  { sibling = "bun.lock", cmd = "bun i" },
+  { sibling = "package-lock.json", cmd = "npm ci" },
+]
+stale = "project"
+icon = ""
+
+[[rule]]
+id = "js-framework-build"
+category = "dev-build"
+label = "JS framework build output"
+name = [".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache", ".vite", ".output", "storybook-static", ".docusaurus", ".astro", ".angular"]
+sibling = ["package.json"]
+safety = "regenerable"
+regen = "rebuilt by the framework dev/build command"
+stale = "project"
+
+[[rule]]
+id = "js-dist"
+category = "dev-build"
+label = "JS build output"
+name = ["dist", "build", "out"]
+sibling = ["package.json"]
+safety = "review"
+regen = "npm run build"
+regen_cmd = [{ sibling = "pnpm-lock.yaml", cmd = "pnpm build" }, { sibling = "yarn.lock", cmd = "yarn build" }, { sibling = "bun.lock*", cmd = "bun run build" }]
+stale = "project"
+promote = { safety = "regenerable", sibling = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"], package_script = "build" }
+
+[[rule]]
+id = "py-caches"
+category = "dev-cache"
+label = "Python tool caches"
+name = ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".pytype", "*.egg-info", ".tox", ".nox", ".hypothesis"]
+safety = "regenerable"
+regen = "recreated on next run"
+stale = "project"
+
+[[rule]]
+id = "py-venv"
+category = "dev-env"
+label = "Python virtualenv"
+name = [".venv", "venv", "env", ".env", "virtualenv"]
+contains = ["pyvenv.cfg"]
+safety = "regenerable"
+regen = "pip install -r requirements.txt"
+regen_cmd = [
+  { sibling = "uv.lock", cmd = "uv sync" },
+  { sibling = "poetry.lock", cmd = "poetry install" },
+  { sibling = "Pipfile.lock", cmd = "pipenv install" },
+  { sibling = "pyproject.toml", cmd = "pip install -e ." },
+]
+stale = "project"
+
+[[rule]]
+id = "cargo-target"
+category = "dev-build"
+label = "Cargo target dir"
+name = ["target"]
+sibling = ["Cargo.toml"]
+safety = "regenerable"
+regen = "cargo build (or cargo clean)"
+stale = "project"
+
+[[rule]]
+id = "gradle-project"
+category = "dev-cache"
+label = "Gradle project cache"
+name = [".gradle"]
+safety = "regenerable"
+regen = "rebuilt by gradle"
+stale = "project"
+
+[[rule]]
+id = "gradle-build"
+category = "dev-build"
+label = "Gradle build output"
+name = ["build"]
+sibling = ["build.gradle*", "settings.gradle*"]
+safety = "regenerable"
+regen = "./gradlew build"
+stale = "project"
+
+[[rule]]
+id = "maven-target"
+category = "dev-build"
+label = "Maven target dir"
+name = ["target"]
+sibling = ["pom.xml"]
+safety = "regenerable"
+regen = "mvn package"
+stale = "project"
+
+[[rule]]
+id = "cocoapods"
+category = "dev-cache"
+label = "CocoaPods"
+name = ["Pods"]
+sibling = ["Podfile"]
+safety = "regenerable"
+regen = "pod install"
+stale = "project"
+
+[[rule]]
+id = "terraform-dir"
+category = "dev-cache"
+label = "Terraform working dir"
+name = [".terraform"]
+safety = "regenerable"
+regen = "terraform init"
+stale = "project"
+
+[[rule]]
+id = "dart-tool"
+category = "dev-cache"
+label = "Dart tool dir"
+name = [".dart_tool"]
+safety = "regenerable"
+regen = "dart pub get"
+stale = "project"
+
+[[rule]]
+id = "elixir-build"
+category = "dev-cache"
+label = "Elixir build and deps"
+name = ["_build", "deps", ".elixir_ls"]
+sibling = ["mix.exs"]
+safety = "regenerable"
+regen = "mix deps.get && mix compile"
+stale = "project"
+
+[[rule]]
+id = "zig-cache"
+category = "dev-build"
+label = "Zig cache and output"
+name = ["zig-cache", ".zig-cache", "zig-out"]
+safety = "regenerable"
+regen = "zig build"
+stale = "project"
+
+[[rule]]
+id = "project-caches"
+category = "dev-cache"
+label = "Project tool caches"
+name = [".nx", ".eslintcache", ".cache", ".swc", ".expo", ".angular", ".stylelintcache"]
+sibling = ["package.json", "nx.json"]
+kind = "any"
+safety = "regenerable"
+regen = "recreated on next run"
+stale = "project"
+
+[[rule]]
+id = "project"
+category = "project"
+label = "Project source"
+name = ["*"]
+contains = [".git"]
+safety = "protected"
+stale = "none"
+fallback = true
+
+# Loose files by extension, anywhere not otherwise claimed.
+
+[[rule]]
+id = "video"
+category = "media-video"
+label = "Video"
+ext = ["mp4", "mkv", "mov", "avi", "m4v", "webm", "wmv", "flv", "mts"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "images"
+category = "media-images"
+label = "Images"
+ext = ["jpg", "jpeg", "png", "heic", "heif", "raw", "cr2", "cr3", "nef", "arw", "dng", "tif", "tiff", "psd", "gif", "webp"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "audio"
+category = "media-audio"
+label = "Audio"
+ext = ["mp3", "m4a", "wav", "flac", "aac", "ogg", "aiff", "alac"]
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "disk-images"
+category = "disk-images"
+label = "Disk images"
+ext = ["dmg", "iso", "img", "vmdk", "qcow2", "vdi", "vhd", "vhdx", "sparseimage", "sparsebundle"]
+kind = "any"
+safety = "protected"
+stale = "none"
+
+[[rule]]
+id = "archives"
+category = "archives"
+label = "Archives"
+ext = ["zip", "tar", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar"]
+safety = "review"
+stale = "self"

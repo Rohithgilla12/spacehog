@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### M2 categoriser
+
+- Rule engine with embedded default rules covering JS, Python, Go, Rust, JVM, Apple, containers, VCS, macOS app data, and user content. Users extend or override it with `~/.config/spacehog/rules.toml`.
+- Fallback rules claim a subtree but keep descending, and per-claim exclusive sizes keep bucket totals exact.
+- Staleness measured from the owning project's manifests and `.git`, safety classes with `dist/` promotion, and regen hints chosen from lockfiles.
+- `spacehog summary`, `spacehog explain`, `spacehog rules`, and `spacehog top --category/--stale/--safety`.
+- Proposal model in core (`propose`, `approve`, `reject`) with path validation shared by every surface.
+
+### M1 scanner and index
+
+- Parallel walker with hardlink dedupe, no symlink following, one-filesystem by default, EACCES nodes, and iCloud dataless detection.
+- SQLite index in WAL mode with pre-order ids, so subtree queries are id-range scans.
+- `spacehog scan`, `spacehog top`, and `spacehog status`, all with `--json`.
+
 ### M0 scaffold
 
 - Cargo workspace with `core`, `tui`, `mcp`, and `cli` crates.

@@ -24,6 +24,17 @@ spacehog mcp        # MCP server over stdio
 spacehog --help     # CLI
 ```
 
+## Performance
+
+Measured on an M-series MacBook with a warm cache (2026-11-06):
+
+| Tree | Files | Walk | Categorise | Index write | Peak RSS | `top --json` |
+|---|---|---|---|---|---|---|
+| projects folder | 1.74M | 9.6 s | 0.26 s | 4.3 s | 879 MB | 7 ms |
+| whole `$HOME` | 15.6M | 99 s | 2.3 s | 55 s | 5.2 GB | 18 ms |
+
+`other` was 8.5% of bytes on that home directory.
+
 ## Licence
 
 MIT
