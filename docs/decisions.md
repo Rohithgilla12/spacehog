@@ -57,3 +57,12 @@ Two layout facts the man page does not make obvious, both covered by `bulk::test
 ## Index write: two more experiments that did not pay
 
 On `/Applications` (295,358 nodes, interleaved, 2026-11-06), single-row inserts took 935, 934, and 939 ms. Multi-row `INSERT` statements of 256 rows took 1,182, 1,234, and 1,361 ms, so they are slower. A 64 MB page cache during the write averaged 790 ms against 854 ms, about 7%, which is not worth 64 MB more peak memory. Single-row prepared inserts with the default cache stay.
+
+## Incremental rescan: deferred, with numbers
+
+The PRD's incremental rescan reuses a directory's indexed entries when its mtime is unchanged. Two measurements argue against building it now (2026-11-06, `$HOME` with 18M nodes):
+
+- The bulk walker already lists a directory in one `open` plus one or two `getattrlistbulk` calls. Checking an unchanged directory's mtime still costs a `stat` per directory, because a child directory's change never touches its parent's mtime. The saving is two or three syscalls per directory, not one per file.
+- Reusing indexed entries means loading the previous scan's rows first, and the write of a fresh scan (62 s here) would be unchanged. The walk is no longer the dominant cost.
+
+Directory mtimes also miss files that grow in place, and `Docker.raw`, the largest single hog on many Macs, is exactly that kind of file. `--incremental` is accepted by the CLI and MCP and reports that it ran a full scan. Revisit it together with an in-place index update, which is the change that would actually cut rescan time.

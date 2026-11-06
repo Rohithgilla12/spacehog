@@ -44,6 +44,9 @@ enum Command {
         /// Cross filesystem boundaries.
         #[arg(long)]
         all_filesystems: bool,
+        /// Accepted for compatibility; every scan is currently a full scan.
+        #[arg(long)]
+        incremental: bool,
         #[arg(long)]
         json: bool,
     },
@@ -261,8 +264,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Some(Command::Scan {
             path,
             all_filesystems,
+            incremental,
             json,
         }) => {
+            if incremental {
+                eprintln!(
+                    "spacehog: incremental rescans are not supported yet; running a full scan"
+                );
+            }
             let root = path.unwrap_or_else(|| config.default_root());
             let categoriser = Arc::new(Categoriser::new(Arc::new(load_rules(&config)?)));
             let mut req = ScanRequest::new(root);

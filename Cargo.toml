@@ -7,6 +7,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Rohithgilla12/spacehog"
+homepage = "https://github.com/Rohithgilla12/spacehog"
+keywords = ["disk", "du", "tui", "mcp", "cleanup"]
+categories = ["command-line-utilities", "filesystem"]
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
