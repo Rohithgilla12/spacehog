@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M4 MCP server
+
+- `spacehog mcp` serves `status`, `scan`, `summary`, `top`, `query`, `explain`, `propose_cleanup`, `list_proposals`, and `rules` over stdio, with `spacehog://summary` and `spacehog://proposals` resources and a `free-space` prompt.
+- Agents can only propose. Proposals record the client's name and wait for a human to approve them unless `mcp.auto_approve` covers every item.
+- Caller-fixable failures come back as tool errors the agent can read; logs go to `~/.local/state/spacehog/mcp.log`, never stdout.
+- `spacehog mcp install` prints the config for Claude Code, Claude Desktop, and Cursor, and `--write` merges it into the Desktop or Cursor file after backing it up.
+
 ### M2 categoriser
 
 - Rule engine with embedded default rules covering JS, Python, Go, Rust, JVM, Apple, containers, VCS, macOS app data, and user content. Users extend or override it with `~/.config/spacehog/rules.toml`.

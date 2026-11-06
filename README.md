@@ -24,6 +24,21 @@ spacehog mcp        # MCP server over stdio
 spacehog --help     # CLI
 ```
 
+## Let Claude clean your disk
+
+`spacehog mcp` serves the engine to MCP clients over stdio. Print the config for Claude Code, Claude Desktop, and Cursor:
+
+```sh
+spacehog mcp install                          # all three snippets
+spacehog mcp install --client cursor --write  # merge into ~/.cursor/mcp.json, backing it up first
+```
+
+For Claude Code, run the `claude mcp add spacehog -- <path> mcp` line it prints. `--write` covers Claude Desktop and Cursor, keeping every other server in the file.
+
+The agent gets `status`, `scan`, `summary`, `top`, `query`, `explain`, `propose_cleanup`, `list_proposals`, and `rules`. It can propose a cleanup but cannot run one: you approve proposals in the TUI or with `spacehog proposals approve <id>`, unless you list a safety class in `mcp.auto_approve`. Logs go to `~/.local/state/spacehog/mcp.log`.
+
+[examples/claude-code.md](examples/claude-code.md) is a captured session that frees space after an `ENOSPC`.
+
 ## Performance
 
 Measured on an M-series MacBook with a warm cache (2026-11-06):

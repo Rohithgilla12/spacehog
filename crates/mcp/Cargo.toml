@@ -17,3 +17,13 @@ serde_json = "1.0.154"
 spacehog-core = { version = "0.1.0", path = "../core" }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "io-std", "time"] }
 tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = "0.3.23"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+# The test re-executes itself as the server, so it needs its own `main`.
+[[test]]
+name = "stdio"
+harness = false
