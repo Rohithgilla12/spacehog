@@ -2150,6 +2150,7 @@ dependencies = [
  "spacehog-core",
  "spacehog-mcp",
  "spacehog-tui",
+ "tempfile",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

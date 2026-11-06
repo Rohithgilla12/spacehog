@@ -101,6 +101,7 @@ enum Command {
         json: bool,
     },
     /// What grew or shrank between two scans of the same root.
+    #[command(alias = "what-changed")]
     Changes {
         /// A duration (7d, 2w) or a scan id; defaults to the previous scan.
         #[arg(long)]

@@ -24,3 +24,6 @@ spacehog-tui = { version = "0.1.0", path = "../tui" }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = "0.3.23"
+
+[dev-dependencies]
+tempfile = "3.27.0"
