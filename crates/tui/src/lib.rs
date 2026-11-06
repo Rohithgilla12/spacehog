@@ -1,4 +1,7 @@
 pub mod app;
+pub mod categories;
+pub mod changes;
+pub mod cleanup;
 pub mod data;
 pub mod explorer;
 pub mod keys;
@@ -7,12 +10,14 @@ pub mod scanning;
 pub mod splash;
 pub mod sys;
 pub mod theme;
+pub mod treemap;
 pub mod ui;
+pub mod widgets;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 
 pub use app::App;
 pub use data::Ctx;
@@ -28,29 +33,31 @@ pub struct TuiOptions {
     pub icons: bool,
 }
 
-const FRAME: Duration = Duration::from_millis(16);
-
 pub fn run(opts: TuiOptions) -> anyhow::Result<()> {
     let ctx = Ctx::load()?;
-    let mut app = App::new(ctx, Theme::detect(opts.icons), &opts)?;
+    let theme = Theme::detect(&ctx.config, opts.icons);
+    let mut app = App::new(ctx, theme, &opts)?;
     let mut terminal = ratatui::init();
+    crossterm::execute!(std::io::stdout(), EnableMouseCapture)?;
     let result = event_loop(&mut terminal, &mut app);
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
 
 /// Redraws only when state changed, at most once per frame.
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> anyhow::Result<()> {
+    let frame = app::FRAME;
     let mut dirty = true;
-    let mut last_draw = Instant::now() - FRAME;
+    let mut last_draw = Instant::now() - frame;
     while !app.quit {
-        if dirty && last_draw.elapsed() >= FRAME {
+        if dirty && last_draw.elapsed() >= frame {
             terminal.draw(|f| ui::draw(f, app))?;
             last_draw = Instant::now();
             dirty = false;
         }
         let wait = if dirty {
-            FRAME.saturating_sub(last_draw.elapsed())
+            frame.saturating_sub(last_draw.elapsed())
         } else {
             app.next_tick()
         };
@@ -60,11 +67,15 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> anyhow:
                     app.handle_key(k)?;
                     dirty = true;
                 }
+                Event::Mouse(m) => {
+                    app.handle_mouse(m)?;
+                    dirty = true;
+                }
                 Event::Resize(..) => dirty = true,
                 _ => {}
             }
         }
-        if app.next_tick().is_zero() || app.scan.is_some() {
+        if app.next_tick().is_zero() || app.animating() {
             dirty |= app.tick()?;
         }
     }

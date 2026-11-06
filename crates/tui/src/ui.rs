@@ -8,16 +8,20 @@ use spacehog_core::model::SizeMode;
 use spacehog_core::report::Explanation;
 use tui_input::Input;
 
-use crate::app::{App, Overlay, Palette};
+use crate::app::{App, Hit, Overlay, Palette};
 use crate::explorer::{self, RowFilter};
 use crate::keys::{self, View};
 use crate::overview::{self, Env};
-use crate::{data, scanning, splash};
+use crate::{categories, changes, cleanup, data, scanning, splash, treemap};
 
 /// Draws the whole screen from `app`. The only mutation is the tree's scroll
 /// offset, which the tree widget keeps in its own state.
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    app.hits.clear();
+    if let Some(base) = app.theme.base() {
+        frame.buffer_mut().set_style(area, base);
+    }
     if app.session.is_none() && app.scan.is_none() {
         render_picker(frame, area, app);
         return;
@@ -38,7 +42,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Some(Overlay::Info(e)) => render_info(frame, area, app, e),
         Some(Overlay::Scan) => {
             if let Some(task) = &app.scan {
-                scanning::render_modal(frame, area, task, &app.ctx, &app.theme);
+                scanning::render_screen(frame, area, task, &app.ctx, &app.theme);
             }
         }
         Some(Overlay::Filter) => render_input_line(frame, status, app, "/", &app.filter),
@@ -46,25 +50,31 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-fn render_header(frame: &mut Frame, area: Rect, app: &App) {
+fn render_header(frame: &mut Frame, area: Rect, app: &mut App) {
     let t = &app.theme;
     let mut spans = Vec::new();
+    let mut x = area.x;
     if area.width >= 90 {
         spans.push(Span::styled(" spacehog ", t.title()));
         spans.push(Span::styled("│", t.border()));
+        x += 11;
     }
+    let compact = area.width < 80;
     for v in View::ALL {
         let style = if v == app.view {
             t.selected().fg(t.accent())
-        } else if v.is_built() {
-            t.text()
         } else {
-            t.dim()
+            t.text()
         };
-        spans.push(Span::styled(
-            format!(" {} {} ", v.number(), v.label()),
-            style,
-        ));
+        let label = if compact && v != app.view {
+            format!(" {} ", v.number())
+        } else {
+            format!(" {} {} ", v.number(), v.label())
+        };
+        let w = label.chars().count() as u16;
+        app.hits.push((Rect::new(x, area.y, w, 1), Hit::View(v)));
+        x += w;
+        spans.push(Span::styled(label, style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -85,7 +95,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
             width: w,
             ..logo
         };
-        splash::render_logo(logo, frame.buffer_mut());
+        render_logo(frame, logo, t);
         frame.render_widget(
             Paragraph::new("Indexing your first scan. Press esc to watch it in the background.")
                 .style(t.dim())
@@ -98,7 +108,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
         View::Overview => overview::render(
             frame,
             area,
-            &session.overview,
+            &mut session.overview,
             &Env {
                 ctx: &app.ctx,
                 theme: t,
@@ -106,6 +116,7 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
                 toggles: app.toggles,
                 queue: &app.queue,
             },
+            &mut app.hits,
         ),
         View::Explorer => explorer::render(
             frame,
@@ -119,15 +130,20 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
                 stale_days: app.ctx.config.stale_days,
             },
         ),
-        v => frame.render_widget(
-            Paragraph::new(vec![
-                Line::default(),
-                Line::styled(format!("{} is not built yet.", v.label()), t.title()),
-                Line::styled("It arrives in a later milestone. Press 1 or 2.", t.dim()),
-            ])
-            .centered(),
+        View::Treemap => {
+            treemap::render(frame, area, &mut session.treemap, &app.ctx, t, app.toggles)
+        }
+        View::Categories => categories::render(frame, area, &mut session.categories, &app.ctx, t),
+        View::Cleanup => cleanup::render(
+            frame,
             area,
+            &mut app.cleanup,
+            &cleanup::Env {
+                ctx: &app.ctx,
+                theme: t,
+            },
         ),
+        View::Changes => changes::render(frame, area, &session.changes, &app.ctx, t),
     }
 }
 
@@ -143,7 +159,7 @@ fn render_status(frame: &mut Frame, area: Rect, app: &App) {
                 if count == 1 { "" } else { "s" },
                 human::bytes(bytes)
             ),
-            Style::new().fg(t.hex("#282a36")).bg(t.accent()),
+            t.badge(),
         )
     } else {
         Span::styled(" no proposals", t.dim())
@@ -370,13 +386,14 @@ fn render_picker(frame: &mut Frame, area: Rect, app: &App) {
     ])
     .areas(area);
     let w = splash::logo_width().min(logo.width);
-    splash::render_logo(
+    render_logo(
+        frame,
         Rect {
             x: logo.x + (logo.width - w) / 2,
             width: w,
             ..logo
         },
-        frame.buffer_mut(),
+        t,
     );
     frame.render_widget(
         Paragraph::new(splash::TAGLINE).style(t.dim()).centered(),
@@ -403,4 +420,12 @@ fn render_picker(frame: &mut Frame, area: Rect, app: &App) {
         hints.push(Span::styled(format!("   {msg}"), Style::new().fg(t.warn())));
     }
     frame.render_widget(Paragraph::new(Line::from(hints)), center(hint));
+}
+
+/// The gradient logo, stripped of colour under `NO_COLOR`.
+fn render_logo(frame: &mut Frame, area: Rect, t: &crate::theme::Theme) {
+    splash::render_logo(area, frame.buffer_mut());
+    if t.mono() {
+        frame.buffer_mut().set_style(area, Style::reset());
+    }
 }

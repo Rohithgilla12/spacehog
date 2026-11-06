@@ -31,19 +31,12 @@ impl View {
         }
     }
 
-    /// Views later milestones fill in render a placeholder until then.
-    pub fn is_built(self) -> bool {
-        matches!(self, View::Overview | View::Explorer)
-    }
-
     pub fn number(self) -> usize {
         View::ALL.iter().position(|v| *v == self).unwrap_or(0) + 1
     }
 
-    pub fn next_built(self) -> View {
-        let built: Vec<View> = View::ALL.into_iter().filter(|v| v.is_built()).collect();
-        let i = built.iter().position(|v| *v == self).map_or(0, |i| i + 1);
-        built[i % built.len()]
+    pub fn next(self) -> View {
+        View::ALL[self.number() % View::ALL.len()]
     }
 }
 
@@ -74,6 +67,25 @@ pub enum Action {
     CopyPath,
     Info,
     Preview,
+    Left,
+    Right,
+    ZoomIn,
+    ZoomOut,
+    DeeperMap,
+    ShallowerMap,
+    Expand,
+    Collapse,
+    Select,
+    SelectAll,
+    PrevTab,
+    NextTab,
+    Approve,
+    Reject,
+    Execute,
+    ToggleMode,
+    Undo,
+    OlderBaseline,
+    NewerBaseline,
 }
 
 impl Action {
@@ -104,6 +116,25 @@ impl Action {
             Action::CopyPath => "Copy path".into(),
             Action::Info => "Explain this item".into(),
             Action::Preview => "Toggle treemap preview".into(),
+            Action::Left => "Move left".into(),
+            Action::Right => "Move right".into(),
+            Action::ZoomIn => "Zoom into folder".into(),
+            Action::ZoomOut => "Zoom out to parent".into(),
+            Action::DeeperMap => "Show more levels".into(),
+            Action::ShallowerMap => "Show fewer levels".into(),
+            Action::Expand => "Expand or collapse rule".into(),
+            Action::Collapse => "Collapse rule".into(),
+            Action::Select => "Select item".into(),
+            Action::SelectAll => "Select all visible".into(),
+            Action::PrevTab => "Queue tab".into(),
+            Action::NextTab => "Proposals tab".into(),
+            Action::Approve => "Approve proposal".into(),
+            Action::Reject => "Reject proposal, or drop from queue".into(),
+            Action::Execute => "Clean up now".into(),
+            Action::ToggleMode => "Toggle Trash / permanent".into(),
+            Action::Undo => "Undo the last cleanup".into(),
+            Action::OlderBaseline => "Compare with an older scan".into(),
+            Action::NewerBaseline => "Compare with a newer scan".into(),
         }
     }
 }
@@ -202,11 +233,70 @@ pub const EXPLORER: Keymap = &[
     (Key::ch('d'), Action::Queue),
 ];
 
+pub const TREEMAP: Keymap = &[
+    (Key::code(KeyCode::Up), Action::Up),
+    (Key::code(KeyCode::Down), Action::Down),
+    (Key::code(KeyCode::Left), Action::Left),
+    (Key::code(KeyCode::Right), Action::Right),
+    (Key::code(KeyCode::Enter), Action::ZoomIn),
+    (Key::code(KeyCode::Backspace), Action::ZoomOut),
+    (Key::ch('+'), Action::DeeperMap),
+    (Key::ch('='), Action::DeeperMap),
+    (Key::ch('-'), Action::ShallowerMap),
+    (Key::ch('d'), Action::Queue),
+    (Key::ch('i'), Action::Info),
+    (Key::ch('o'), Action::Reveal),
+    (Key::ch('y'), Action::CopyPath),
+];
+
+pub const CATEGORIES: Keymap = &[
+    (Key::code(KeyCode::Up), Action::Up),
+    (Key::ch('k'), Action::Up),
+    (Key::code(KeyCode::Down), Action::Down),
+    (Key::ch('j'), Action::Down),
+    (Key::code(KeyCode::Enter), Action::Expand),
+    (Key::code(KeyCode::Right), Action::Expand),
+    (Key::code(KeyCode::Left), Action::Collapse),
+    (Key::ch(' '), Action::Select),
+    (Key::ch('a'), Action::SelectAll),
+    (Key::ch('d'), Action::Queue),
+    (Key::ch('i'), Action::Info),
+    (Key::ch('g'), Action::Top),
+    (Key::ch('G'), Action::Bottom),
+];
+
+pub const CLEANUP: Keymap = &[
+    (Key::code(KeyCode::Up), Action::Up),
+    (Key::ch('k'), Action::Up),
+    (Key::code(KeyCode::Down), Action::Down),
+    (Key::ch('j'), Action::Down),
+    (Key::code(KeyCode::Left), Action::PrevTab),
+    (Key::code(KeyCode::Right), Action::NextTab),
+    (Key::code(KeyCode::Enter), Action::Approve),
+    (Key::ch('x'), Action::Reject),
+    (Key::ch('D'), Action::Execute),
+    (Key::ch('m'), Action::ToggleMode),
+    (Key::ch('u'), Action::Undo),
+    (Key::ch('i'), Action::Info),
+];
+
+pub const CHANGES: Keymap = &[
+    (Key::code(KeyCode::Up), Action::Up),
+    (Key::ch('k'), Action::Up),
+    (Key::code(KeyCode::Down), Action::Down),
+    (Key::ch('j'), Action::Down),
+    (Key::ch('['), Action::OlderBaseline),
+    (Key::ch(']'), Action::NewerBaseline),
+];
+
 pub fn keymap(view: View) -> Keymap {
     match view {
         View::Overview => OVERVIEW,
         View::Explorer => EXPLORER,
-        _ => &[],
+        View::Treemap => TREEMAP,
+        View::Categories => CATEGORIES,
+        View::Cleanup => CLEANUP,
+        View::Changes => CHANGES,
     }
 }
 
@@ -285,9 +375,38 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_only_built_views() {
-        assert_eq!(View::Overview.next_built(), View::Explorer);
-        assert_eq!(View::Explorer.next_built(), View::Overview);
-        assert_eq!(View::Treemap.next_built(), View::Overview);
+    fn tab_cycles_every_view() {
+        assert_eq!(View::Overview.next(), View::Explorer);
+        assert_eq!(View::Cleanup.next(), View::Changes);
+        assert_eq!(View::Changes.next(), View::Overview);
+    }
+
+    #[test]
+    fn every_action_has_a_key_in_some_view() {
+        let reachable: Vec<Action> = View::ALL
+            .into_iter()
+            .flat_map(|v| actions(v).into_iter().map(|(_, a)| a))
+            .collect();
+        for a in [
+            Action::ZoomIn,
+            Action::ZoomOut,
+            Action::DeeperMap,
+            Action::ShallowerMap,
+            Action::Expand,
+            Action::Collapse,
+            Action::Select,
+            Action::SelectAll,
+            Action::PrevTab,
+            Action::NextTab,
+            Action::Approve,
+            Action::Reject,
+            Action::Execute,
+            Action::ToggleMode,
+            Action::Undo,
+            Action::OlderBaseline,
+            Action::NewerBaseline,
+        ] {
+            assert!(reachable.contains(&a), "{a:?} has no key");
+        }
     }
 }

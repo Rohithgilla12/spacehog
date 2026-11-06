@@ -8,7 +8,7 @@ use spacehog_core::config::Config;
 use spacehog_core::engine::{ScanJob, ScanRequest, spawn_scan};
 use spacehog_core::model::{NodeFlags, NodeId, NodeInfo, NodeKind, ScanRecord, SizeMode};
 use spacehog_core::report::{self, Item, TopQuery};
-use spacehog_core::rules::RuleSet;
+use spacehog_core::rules::{RuleSet, Safety};
 use spacehog_core::status::{Volume, volume_for};
 
 /// Everything the TUI reads from: the index, the rules, the config, and
@@ -154,7 +154,74 @@ fn slice(rules: &RuleSet, id: String, bytes: u64) -> BucketSlice {
     }
 }
 
-pub const TOP_ROWS: usize = 15;
+/// Enough rows to fill a tall terminal; the list scrolls past what fits.
+/// Bytes per safety class. Everything no rule claims counts as protected.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SafetySplit {
+    pub regenerable: u64,
+    pub cache: u64,
+    pub review: u64,
+    pub protected: u64,
+    /// The part of regenerable plus cache that is idle past the stale threshold.
+    pub stale_safe: u64,
+}
+
+impl SafetySplit {
+    pub fn safe(&self) -> u64 {
+        self.regenerable + self.cache
+    }
+}
+
+/// Uses the safety each claim recorded at scan time (which includes
+/// promotions such as `dist/` with a build script), falling back to the rule's class.
+pub fn safety_split(ctx: &Ctx, snap: &Snapshot, t: Toggles) -> Result<SafetySplit> {
+    let col = match t.size {
+        SizeMode::Disk => "excl_disk",
+        SizeMode::Apparent => "excl_apparent",
+    };
+    let cutoff = spacehog_core::index::now() - ctx.config.stale_days * 86_400;
+    let sql = format!(
+        "SELECT rule_id, safety, SUM({col}),
+                SUM(CASE WHEN stale_ref IS NOT NULL AND stale_ref <= ?3 THEN {col} ELSE 0 END)
+         FROM nodes WHERE scan_id = ?1 AND claim = 1 AND (flags & ?2) = 0
+         GROUP BY rule_id, safety"
+    );
+    let mut stmt = ctx.index.connection().prepare_cached(&sql)?;
+    let rows: Vec<(Option<String>, Option<String>, i64, i64)> = stmt
+        .query_map(
+            rusqlite::params![snap.scan.id, NodeFlags::DELETED, cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )?
+        .collect::<std::result::Result<_, _>>()?;
+    let mut out = SafetySplit::default();
+    let mut claimed = 0u64;
+    for (rule, safety, bytes, stale) in rows {
+        let (bytes, stale) = (bytes as u64, stale as u64);
+        claimed += bytes;
+        let class = safety
+            .as_deref()
+            .and_then(Safety::parse)
+            .or_else(|| {
+                rule.as_deref()
+                    .and_then(|r| ctx.rules.get(r))
+                    .map(|r| r.safety())
+            })
+            .unwrap_or(Safety::Protected);
+        match class {
+            Safety::Regenerable => out.regenerable += bytes,
+            Safety::Cache => out.cache += bytes,
+            Safety::Review => out.review += bytes,
+            Safety::Protected => out.protected += bytes,
+        }
+        if matches!(class, Safety::Regenerable | Safety::Cache) {
+            out.stale_safe += stale;
+        }
+    }
+    out.protected += snap.root.size(t.size).saturating_sub(claimed);
+    Ok(out)
+}
+
+pub const TOP_ROWS: usize = 120;
 
 /// The largest categorised items under the session's toggles and filter.
 pub fn top(
@@ -168,7 +235,7 @@ pub fn top(
         return Ok(Vec::new());
     }
     let q = TopQuery {
-        limit: TOP_ROWS * 6,
+        limit: TOP_ROWS * 3,
         category: bucket.map(str::to_string),
         stale_days: t.stale_only.then_some(ctx.config.stale_days),
         ..Default::default()

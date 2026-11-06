@@ -2,17 +2,18 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Widget};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use spacehog_core::human;
 use spacehog_core::model::{NodeId, NodeInfo, NodeKind};
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 use crate::data::{self, Ctx, Toggles};
 use crate::theme::Theme;
+use crate::treemap;
+use crate::widgets::{self, Bar};
 
 /// A lazily loaded tree over one scan. `TreeState` owns which folders are
 /// open and which row is selected; `children` caches index reads.
@@ -250,15 +251,17 @@ impl ExplorerState {
         open: &HashSet<Vec<NodeId>>,
         r: &RowStyle,
     ) -> Vec<TreeItem<'static, NodeId>> {
-        self.kids(path, open, r.filter)
-            .into_iter()
+        let kids = self.kids(path, open, r.filter);
+        let size = |n: &NodeInfo| n.size(r.filter.toggles.size);
+        let biggest = kids.iter().map(|n| size(n)).max().unwrap_or(1).max(1);
+        kids.into_iter()
             .map(|n| {
                 let mut p = path.to_vec();
                 p.push(n.id);
                 let is_open = open.contains(&p);
-                let line = row(n, parent_size, is_open, r);
+                let line = row(n, parent_size, biggest, path.len(), is_open, r);
                 let kids = if is_open {
-                    self.items(&p, n.size(r.filter.toggles.size), open, r)
+                    self.items(&p, size(n), open, r)
                 } else {
                     Vec::new()
                 };
@@ -272,20 +275,12 @@ struct RowStyle<'a> {
     ctx: &'a Ctx,
     theme: &'a Theme,
     filter: RowFilter<'a>,
+    /// Row width, so every column lines up whatever the tree indent.
+    width: usize,
 }
 
-const BAR: usize = 10;
-
-/// Block-character bar with eighth-cell resolution.
-pub fn bar(frac: f64, width: usize) -> String {
-    const PARTS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-    let eighths = (frac.clamp(0.0, 1.0) * (width * 8) as f64).round() as usize;
-    let mut s = "█".repeat(eighths / 8);
-    s.push_str(PARTS[eighths % 8]);
-    let used = s.chars().count();
-    s.push_str(&" ".repeat(width.saturating_sub(used)));
-    s
-}
+/// Unclaimed folders still get a visible bar, in a neutral grey.
+const NEUTRAL: crate::theme::Rgb = (0x8a, 0x8f, 0xa8);
 
 fn pct(part: u64, whole: u64) -> f64 {
     if whole == 0 {
@@ -295,11 +290,19 @@ fn pct(part: u64, whole: u64) -> f64 {
     }
 }
 
-fn row(n: &NodeInfo, parent_size: u64, open: bool, r: &RowStyle) -> Line<'static> {
+/// Name first (the tree indents it), then columns at fixed offsets: a bar
+/// against the largest sibling, size, share of the parent, bucket, idle
+/// time, and child count.
+fn row(
+    n: &NodeInfo,
+    parent_size: u64,
+    biggest: u64,
+    depth: usize,
+    open: bool,
+    r: &RowStyle,
+) -> Line<'static> {
     let t = r.theme;
     let size = n.size(r.filter.toggles.size);
-    let frac = pct(size, parent_size);
-    let colour = t.bucket(&r.ctx.rules, n.bucket.as_deref());
     let is_dir = n.kind == NodeKind::Dir;
     let arrow = match (is_dir && n.child_count > 0, open) {
         (true, true) => t.icon("\u{f115} ", "▾ "),
@@ -307,37 +310,74 @@ fn row(n: &NodeInfo, parent_size: u64, open: bool, r: &RowStyle) -> Line<'static
         (false, _) if is_dir => t.icon("\u{f114} ", "  "),
         _ => t.icon("\u{f15b} ", "  "),
     };
+    let wide = r.width >= 100;
+    let bar_w = (r.width * 28 / 100).clamp(8, 48);
+    let bucket_w = if wide { 16 } else { 0 };
+    let tail = bar_w + 1 + 10 + 7 + bucket_w + 6 + 7;
+    let name_w = r.width.saturating_sub(tail + 2 + depth * 2).max(6);
+    let name = format!("{}{}", n.name, if is_dir { "/" } else { "" });
+    let colour = if n.bucket.is_some() {
+        t.bucket_of(&r.ctx.rules, n.bucket.as_deref())
+    } else {
+        NEUTRAL
+    };
     let mut spans = vec![
-        Span::styled(bar(frac, BAR), Style::new().fg(colour)),
-        Span::styled(format!(" {:>9}", human::bytes(size)), t.text()),
-        Span::styled(format!(" {:>5.1}% ", frac * 100.0), t.dim()),
         Span::styled(arrow, t.dim()),
         Span::styled(
-            format!("{}{}", n.name, if is_dir { "/" } else { "" }),
+            format!("{:<name_w$}", data::truncate_middle(&name, name_w)),
             if is_dir {
                 t.text().add_modifier(Modifier::BOLD)
             } else {
                 t.text()
             },
         ),
+        Span::raw(" "),
     ];
-    if n.claim
-        && let Some(b) = n.bucket.as_deref().and_then(|b| r.ctx.rules.bucket(b))
-    {
+    spans.extend(
+        widgets::bar(Bar {
+            frac: pct(size, biggest),
+            width: bar_w,
+            colour,
+            theme: t,
+        })
+        .spans,
+    );
+    spans.push(Span::styled(
+        format!(" {:>9}", human::bytes(size)),
+        t.text(),
+    ));
+    spans.push(Span::styled(
+        format!(" {:>5.1}%", pct(size, parent_size) * 100.0),
+        t.dim(),
+    ));
+    if wide {
+        let label = n
+            .bucket
+            .as_deref()
+            .filter(|_| n.claim)
+            .and_then(|b| r.ctx.rules.bucket(b))
+            .map(|b| b.label.clone())
+            .unwrap_or_default();
         spans.push(Span::styled(
-            format!("  {}", b.label),
-            Style::new().fg(colour),
+            format!(" {:<15}", data::truncate_middle(&label, 15)),
+            Style::new().fg(t.rgb(colour)),
         ));
     }
-    if let Some(d) = n.stale_days.filter(|d| *d >= r.filter.stale_days) {
-        spans.push(Span::styled(
-            format!("  {}", human::days(d)),
-            Style::new().fg(t.warn()),
-        ));
-    }
-    if is_dir && n.child_count > 0 {
-        spans.push(Span::styled(format!("  {}", n.child_count), t.dim()));
-    }
+    let stale = n
+        .stale_days
+        .filter(|d| *d >= r.filter.stale_days)
+        .map(human::days)
+        .unwrap_or_default();
+    spans.push(Span::styled(
+        format!(" {stale:>5}"),
+        Style::new().fg(t.warn()),
+    ));
+    let count = if is_dir && n.child_count > 0 {
+        n.child_count.to_string()
+    } else {
+        String::new()
+    };
+    spans.push(Span::styled(format!(" {count:>6}"), t.dim()));
     Line::from(spans)
 }
 
@@ -351,10 +391,16 @@ pub fn render(
 ) {
     let [crumb_area, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
-    let mut crumbs = vec![Span::styled(ctx.tilde(&s.root.path), theme.dim())];
-    for name in s.breadcrumb() {
+    let mut crumbs = vec![Span::styled(ctx.tilde(&s.root.path), theme.text())];
+    let mut trail = s.breadcrumb();
+    let selected = trail.pop();
+    for name in trail {
         crumbs.push(Span::styled(" › ", theme.dim()));
         crumbs.push(Span::styled(name, theme.text()));
+    }
+    if let Some(name) = selected {
+        crumbs.push(Span::styled("   ▸ ", theme.dim()));
+        crumbs.push(Span::styled(name, theme.dim()));
     }
     frame.render_widget(Paragraph::new(Line::from(crumbs)), crumb_area);
 
@@ -371,6 +417,7 @@ pub fn render(
         ctx,
         theme,
         filter: f,
+        width: tree_area.width as usize,
     };
     let open = s.opened();
     let items = s.items(&[], s.root.size(f.toggles.size), open, &style);
@@ -415,147 +462,37 @@ pub fn render(
             .title(Span::styled(format!(" {name} "), theme.title()));
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let kids: Vec<&NodeInfo> = s
+        let kids: Vec<NodeInfo> = s
             .children
             .get(&dir)
             .map(|k| {
                 k.iter()
                     .filter(|n| n.size(f.toggles.size) > 0)
-                    .take(24)
+                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
-        let tiles = squarify(
-            &kids
-                .iter()
-                .map(|n| n.size(f.toggles.size))
-                .collect::<Vec<_>>(),
+        let size = Rect::new(0, 0, inner.width, inner.height.saturating_mul(2));
+        let tiles: Vec<_> = treemap::level(&kids, size, f.toggles, ctx, theme)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, _, mut tile))| {
+                tile.top = i;
+                tile
+            })
+            .collect();
+        treemap::paint(
+            frame.buffer_mut(),
             inner,
+            &tiles,
+            &[],
+            &treemap::Paint {
+                theme,
+                selected: None,
+                hover: None,
+                view: None,
+                outline: (0, 0, 0),
+            },
         );
-        let buf = frame.buffer_mut();
-        for (n, rect) in kids.iter().zip(tiles) {
-            paint_tile(
-                buf,
-                rect,
-                &n.name,
-                theme.bucket(&ctx.rules, n.bucket.as_deref()),
-            );
-        }
-    }
-}
-
-/// Splits `area` among `weights` (sorted largest first) by recursive
-/// halving along the longer side, which keeps tiles close to square.
-pub fn squarify(weights: &[u64], area: Rect) -> Vec<Rect> {
-    let mut out = vec![Rect::default(); weights.len()];
-    split(weights, 0, area, &mut out);
-    out
-}
-
-fn split(weights: &[u64], offset: usize, area: Rect, out: &mut [Rect]) {
-    if weights.is_empty() || area.width == 0 || area.height == 0 {
-        return;
-    }
-    if weights.len() == 1 {
-        out[offset] = area;
-        return;
-    }
-    let total: u64 = weights.iter().sum();
-    let mut acc = 0;
-    let mut cut = 1;
-    for (i, w) in weights.iter().enumerate() {
-        if acc + w > total / 2 && i > 0 {
-            break;
-        }
-        acc += w;
-        cut = i + 1;
-    }
-    cut = cut.min(weights.len() - 1);
-    let frac = if total == 0 {
-        0.5
-    } else {
-        acc as f64 / total as f64
-    };
-    // Cells are about twice as tall as wide, so compare width against 2x height.
-    let (a, b) = if area.width >= area.height * 2 {
-        let w = ((area.width as f64 * frac).round() as u16)
-            .clamp(1, area.width.saturating_sub(1).max(1));
-        (
-            Rect { width: w, ..area },
-            Rect {
-                x: area.x + w,
-                width: area.width - w,
-                ..area
-            },
-        )
-    } else {
-        let h = ((area.height as f64 * frac).round() as u16)
-            .clamp(1, area.height.saturating_sub(1).max(1));
-        (
-            Rect { height: h, ..area },
-            Rect {
-                y: area.y + h,
-                height: area.height - h,
-                ..area
-            },
-        )
-    };
-    split(&weights[..cut], offset, a, out);
-    split(&weights[cut..], offset + cut, b, out);
-}
-
-fn paint_tile(buf: &mut Buffer, rect: Rect, name: &str, colour: Color) {
-    if rect.width == 0 || rect.height == 0 {
-        return;
-    }
-    let fill = Style::new().bg(crate::theme::dim(colour)).fg(colour);
-    buf.set_style(rect, fill);
-    for y in rect.top()..rect.bottom() {
-        buf[(rect.right() - 1, y)].set_symbol("▕");
-    }
-    if rect.height > 1 {
-        for x in rect.left()..rect.right() - 1 {
-            buf[(x, rect.bottom() - 1)].set_symbol("▁");
-        }
-    }
-    if rect.width > 2 {
-        let label = data::truncate_middle(name, rect.width as usize - 1);
-        Paragraph::new(label)
-            .style(fill.add_modifier(Modifier::BOLD))
-            .render(
-                Rect {
-                    width: rect.width - 1,
-                    height: 1,
-                    ..rect
-                },
-                buf,
-            );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bar_fills_proportionally() {
-        assert_eq!(bar(1.0, 4), "████");
-        assert_eq!(bar(0.0, 4), "    ");
-        assert_eq!(bar(0.5, 4), "██  ");
-        assert_eq!(bar(0.5, 4).chars().count(), 4);
-    }
-
-    #[test]
-    fn squarify_covers_area_without_overlap() {
-        let area = Rect::new(0, 0, 40, 12);
-        let tiles = squarify(&[50, 25, 15, 10], area);
-        let cells: u32 = tiles.iter().map(|r| r.area()).sum();
-        assert_eq!(cells, area.area());
-        for (i, a) in tiles.iter().enumerate() {
-            for b in &tiles[i + 1..] {
-                assert!(!a.intersects(*b), "{a:?} overlaps {b:?}");
-            }
-        }
-        assert!(tiles[0].area() > tiles[3].area());
     }
 }

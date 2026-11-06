@@ -2,20 +2,21 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Line as CanvasLine};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use spacehog_core::engine::{ScanJob, ScanOutcome};
 use spacehog_core::human;
-use spacehog_core::scan::{Phase, ProgressSnapshot, RateMeter};
+use spacehog_core::scan::{Phase, ProgressSnapshot, RateMeter, TopLevelDir};
 use throbber_widgets_tui::{BRAILLE_SIX, Throbber, ThrobberState};
+use tui_big_text::{BigText, PixelSize};
 
 use crate::data::{Ctx, truncate_middle};
 use crate::theme::Theme;
+use crate::widgets::{self, Bar};
 
-/// A running scan plus what the modal draws from it. `snapshot`, `elapsed`
+/// A running scan plus what the scan screen draws from it. `snapshot`, `elapsed`
 /// and the meter refresh on each tick so drawing never reads the clock.
 pub struct ScanTask {
     job: ScanJob,
@@ -23,6 +24,8 @@ pub struct ScanTask {
     pub meter: RateMeter,
     pub throbber: ThrobberState,
     pub snapshot: ProgressSnapshot,
+    /// Direct children of the root that finished walking, largest first.
+    pub top: Vec<TopLevelDir>,
     pub elapsed: Duration,
     started: Instant,
 }
@@ -32,9 +35,10 @@ impl ScanTask {
         Self {
             root: job.root.clone(),
             job,
-            meter: RateMeter::new(120),
+            meter: RateMeter::new(400),
             throbber: ThrobberState::default(),
             snapshot: ProgressSnapshot::default(),
+            top: Vec::new(),
             elapsed: Duration::ZERO,
             started: Instant::now(),
         }
@@ -42,6 +46,7 @@ impl ScanTask {
 
     pub fn tick(&mut self) {
         self.snapshot = self.job.progress.snapshot();
+        self.top = self.job.progress.finished_top_level();
         self.meter.sample(self.snapshot.files);
         self.throbber.calc_next();
         self.elapsed = self.started.elapsed();
@@ -99,149 +104,209 @@ pub fn badge(task: &ScanTask) -> String {
     )
 }
 
-pub fn render_modal(frame: &mut Frame, area: Rect, task: &ScanTask, ctx: &Ctx, theme: &Theme) {
-    let w = area.width.saturating_sub(4).min(76);
-    let h = 13.min(area.height);
-    let modal = Rect {
-        x: area.x + (area.width - w) / 2,
-        y: area.y + (area.height - h) / 2,
-        width: w,
-        height: h,
+pub fn render_screen(frame: &mut Frame, area: Rect, task: &ScanTask, ctx: &Ctx, theme: &Theme) {
+    let t = theme;
+    frame.render_widget(Clear, area);
+    if let Some(base) = t.base() {
+        frame.buffer_mut().set_style(area, base);
+    }
+    let snap = &task.snapshot;
+    let tall = area.height >= 30;
+    let big_h = if area.height >= 24 { 4 } else { 1 };
+    let chart_h = if tall {
+        (area.height / 5).clamp(4, 10)
+    } else {
+        3
     };
-    frame.render_widget(Clear, modal);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme.accent()))
-        .title(Span::styled(" Scanning ", theme.title()))
-        .title_bottom(Line::from(vec![
-            Span::styled(" esc ", theme.title()),
-            Span::styled("run in background ", theme.dim()),
-        ]));
-    let inner = block.inner(modal);
-    frame.render_widget(block, modal);
-    let [head, path, _, counters, phases, _, spark] = Layout::vertical([
+    let [head, _, big, tiles, steps, _, chart, path, list] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(big_h),
+        Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Length(2),
         Constraint::Length(1),
+        Constraint::Length(chart_h),
         Constraint::Length(1),
         Constraint::Min(1),
     ])
-    .areas(inner);
+    .areas(area.inner(Margin::new(1, 0)));
 
-    let snap = &task.snapshot;
     let throbber = Throbber::default()
         .throbber_set(BRAILLE_SIX)
-        .throbber_style(Style::new().fg(theme.accent()));
-    let [spin, root, time] = Layout::horizontal([
-        Constraint::Length(2),
-        Constraint::Min(1),
-        Constraint::Length(6),
-    ])
-    .areas(head);
-    frame.render_widget(
-        Paragraph::new(throbber.to_symbol_span(&task.throbber)),
-        spin,
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            ctx.tilde(&task.root.to_string_lossy()),
-            theme.text(),
-        )),
-        root,
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(clock(task.elapsed), theme.dim())),
-        time,
+        .throbber_style(Style::new().fg(t.accent()));
+    let mut spans = vec![
+        throbber.to_symbol_span(&task.throbber),
+        Span::styled(" Scanning ", t.title()),
+        Span::styled(ctx.tilde(&task.root.to_string_lossy()), t.text()),
+    ];
+    let hint = Line::from(vec![
+        Span::styled("esc", t.title()),
+        Span::styled(" run in background", t.dim()),
+    ]);
+    spans.push(Span::raw(" "));
+    let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(hint.width() as u16)])
+        .areas(head);
+    frame.render_widget(Paragraph::new(Line::from(spans)), l);
+    frame.render_widget(Paragraph::new(hint), r);
+
+    let bytes = human::bytes(snap.bytes);
+    if big_h == 4 {
+        let size = if big.width >= bytes.len() as u16 * 8 + 20 {
+            PixelSize::HalfHeight
+        } else {
+            PixelSize::Quadrant
+        };
+        let [num, cap] =
+            Layout::horizontal([Constraint::Min(1), Constraint::Length(26)]).areas(big);
+        frame.render_widget(
+            BigText::builder()
+                .pixel_size(size)
+                .style(t.title())
+                .lines(vec![bytes.into()])
+                .build(),
+            num,
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::default(),
+                Line::styled("found so far", t.dim()),
+                Line::from(vec![
+                    Span::styled(count(task.rate()), t.text().add_modifier(Modifier::BOLD)),
+                    Span::styled(" files/s", t.dim()),
+                ]),
+            ]),
+            cap,
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(bytes, t.title()),
+                Span::styled(format!("  {} files/s", count(task.rate())), t.dim()),
+            ])),
+            big,
+        );
+    }
+
+    let stats = [
+        ("files", count(snap.files)),
+        ("folders", count(snap.dirs)),
+        ("errors", count(snap.errors)),
+        ("elapsed", clock(task.elapsed)),
+    ];
+    let cells = Layout::horizontal([Constraint::Ratio(1, 4); 4])
+        .spacing(1)
+        .split(tiles);
+    for ((label, value), cell) in stats.iter().zip(cells.iter()) {
+        let warn = *label == "errors" && snap.errors > 0;
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(t.border())
+            .title(Span::styled(format!(" {label} "), t.dim()));
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                value.clone(),
+                if warn {
+                    Style::new().fg(t.warn()).add_modifier(Modifier::BOLD)
+                } else {
+                    t.text().add_modifier(Modifier::BOLD)
+                },
+            ))
+            .block(block),
+            *cell,
+        );
+    }
+
+    let mut stepper = Vec::new();
+    for (i, p) in [Phase::Walking, Phase::Labelling, Phase::Writing]
+        .into_iter()
+        .enumerate()
+    {
+        let (dot, style) = if p == snap.phase {
+            (
+                "●",
+                Style::new().fg(t.accent()).add_modifier(Modifier::BOLD),
+            )
+        } else if (p as u8) < (snap.phase as u8) {
+            ("✓", Style::new().fg(t.good()))
+        } else {
+            ("○", t.dim())
+        };
+        if i > 0 {
+            stepper.push(Span::styled(" ──── ", t.border()));
+        }
+        stepper.push(Span::styled(format!("{dot} {}", phase_label(p)), style));
+    }
+    if snap.phase == Phase::Writing {
+        stepper.push(Span::styled(
+            format!("   {} rows written", count(snap.written)),
+            t.text(),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(stepper)), steps);
+
+    widgets::area_chart(
+        frame.buffer_mut(),
+        chart,
+        &task.meter.samples,
+        t.bucket_rgb("#ff79c6"),
+        t,
     );
     let current = ctx.tilde(&snap.current_path);
     frame.render_widget(
         Paragraph::new(Span::styled(
             truncate_middle(&current, path.width as usize),
-            theme.dim(),
+            t.dim(),
         )),
         path,
     );
 
-    let stat = |label: &'static str, value: String| {
-        vec![
-            Span::styled(format!("{label:<7}"), theme.dim()),
-            Span::styled(format!("{value:<16}"), theme.text()),
-        ]
-    };
-    let mut row1 = stat("files", count(snap.files));
-    row1.extend(stat("dirs", count(snap.dirs)));
-    let mut row2 = stat("bytes", human::bytes(snap.bytes));
-    row2.extend(stat("errors", count(snap.errors)));
-    frame.render_widget(
-        Paragraph::new(vec![Line::from(row1), Line::from(row2)]),
-        counters,
-    );
-
-    let mut steps = vec![Span::styled(format!("{:<7}", "phase"), theme.dim())];
-    for p in [Phase::Walking, Phase::Labelling, Phase::Writing] {
-        let (dot, style) = if p == snap.phase {
-            ("● ", Style::new().fg(theme.accent()))
-        } else if (p as u8) < (snap.phase as u8) {
-            ("✓ ", theme.dim())
-        } else {
-            ("○ ", theme.dim())
-        };
-        steps.push(Span::styled(dot, style));
-        steps.push(Span::styled(format!("{}  ", phase_label(p)), style));
+    let block = Block::new()
+        .borders(Borders::TOP)
+        .border_style(t.border())
+        .title(Span::styled(" Largest folders so far ", t.title()));
+    let inner = block.inner(list);
+    frame.render_widget(block, list);
+    if task.top.is_empty() {
+        frame.render_widget(
+            Paragraph::new("Folders appear here as each one finishes.").style(t.dim()),
+            inner,
+        );
+        return;
     }
-    if snap.phase == Phase::Writing {
-        steps.push(Span::styled(
-            format!("{} rows written", count(snap.written)),
-            theme.text(),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(steps)), phases);
-
-    let [graph, rate] =
-        Layout::horizontal([Constraint::Min(10), Constraint::Length(18)]).areas(spark);
-    render_sparkline(frame, graph, &task.meter.samples, theme);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::styled(format!(" {}", count(task.rate())), theme.title()),
-            Line::styled(" files/s", theme.dim()),
-        ]),
-        rate,
-    );
-}
-
-/// Files per second as a braille line, newest sample on the right.
-fn render_sparkline(frame: &mut Frame, area: Rect, samples: &[u64], theme: &Theme) {
-    let w = f64::from(area.width) * 2.0;
-    let h = f64::from(area.height) * 4.0;
-    let shown = samples.len().min(area.width as usize * 2);
-    let tail = &samples[samples.len() - shown..];
-    let max = tail.iter().copied().max().unwrap_or(1).max(1) as f64;
-    let colour = theme.accent();
-    let pts: Vec<(f64, f64)> = tail
+    let max = task.top[0].disk.max(1);
+    let w = inner.width as usize;
+    let bar_w = (w * 45 / 100).clamp(8, 80);
+    let name_w = w.saturating_sub(bar_w + 10 + 16 + 2).max(8);
+    let lines: Vec<Line> = task
+        .top
         .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let x = w - (shown - i) as f64 + 0.5;
-            (x, *v as f64 / max * (h - 1.0) + 0.5)
+        .take(inner.height as usize)
+        .map(|d| {
+            let mut spans = vec![Span::styled(
+                format!("{:<name_w$} ", truncate_middle(&d.name, name_w)),
+                t.text().add_modifier(Modifier::BOLD),
+            )];
+            spans.extend(
+                widgets::bar(Bar {
+                    frac: d.disk as f64 / max as f64,
+                    width: bar_w,
+                    colour: t.bucket_rgb("#bd93f9"),
+                    theme: t,
+                })
+                .spans,
+            );
+            spans.push(Span::styled(
+                format!(" {:>9}", human::bytes(d.disk)),
+                t.text(),
+            ));
+            spans.push(Span::styled(
+                format!(" {:>14}", format!("{} files", count(d.files))),
+                t.dim(),
+            ));
+            Line::from(spans)
         })
         .collect();
-    let canvas = Canvas::default()
-        .x_bounds([0.0, w])
-        .y_bounds([0.0, h])
-        .paint(move |ctx| {
-            for pair in pts.windows(2) {
-                ctx.draw(&CanvasLine {
-                    x1: pair[0].0,
-                    y1: pair[0].1,
-                    x2: pair[1].0,
-                    y2: pair[1].1,
-                    color: colour,
-                });
-            }
-        });
-    frame.render_widget(canvas, area);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
