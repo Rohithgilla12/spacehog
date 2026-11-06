@@ -122,7 +122,7 @@ pub fn stacked(buf: &mut Buffer, area: Rect, segs: &[Segment], t: &Theme) {
             let label = [
                 format!("{} {pct:.0}%", s.label),
                 format!("{} {pct:.0}%", short.join(" ")),
-                format!("{pct:.0}%"),
+                format!("{} {pct:.0}%", short.first().copied().unwrap_or_default()),
             ]
             .into_iter()
             .find(|l| (l.chars().count() as u16) < width)
