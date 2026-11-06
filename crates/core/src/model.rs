@@ -80,6 +80,10 @@ pub struct ScanRecord {
     pub errors: u64,
     pub current_path: Option<String>,
     pub pid: Option<u32>,
+    /// walking, labelling, writing, or done while a scan runs.
+    pub phase: Option<String>,
+    /// Rows written so far during the writing phase.
+    pub written: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

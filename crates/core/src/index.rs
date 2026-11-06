@@ -114,6 +114,10 @@ CREATE INDEX journal_by_id ON journal (journal_id);
     r#"
 ALTER TABLE journal ADD COLUMN trashed_to TEXT;
 "#,
+    r#"
+ALTER TABLE scans ADD COLUMN phase TEXT;
+ALTER TABLE scans ADD COLUMN written INTEGER NOT NULL DEFAULT 0;
+"#,
 ];
 
 /// Older scans of a root keep only directories, claimed items, and files at
@@ -170,7 +174,8 @@ impl Index {
 
     pub fn update_progress(&self, scan: ScanId, p: &ProgressSnapshot) -> Result<()> {
         self.conn.execute(
-            "UPDATE scans SET files = ?2, dirs = ?3, bytes = ?4, errors = ?5, current_path = ?6
+            "UPDATE scans SET files = ?2, dirs = ?3, bytes = ?4, errors = ?5, current_path = ?6,
+                phase = ?7, written = ?8
              WHERE id = ?1 AND status = 'running'",
             params![
                 scan,
@@ -178,7 +183,11 @@ impl Index {
                 p.dirs as i64,
                 p.bytes as i64,
                 p.errors as i64,
-                p.current_path
+                p.current_path,
+                serde_json::to_value(p.phase)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned)),
+                p.written as i64,
             ],
         )?;
         Ok(())
@@ -557,7 +566,7 @@ pub(crate) fn join(parent: &str, name: &str) -> String {
 }
 
 const SCAN_SELECT: &str = "SELECT id, root, status, started_at, finished_at, files, dirs, bytes,
-    apparent_bytes, errors, current_path, pid FROM scans";
+    apparent_bytes, errors, current_path, pid, phase, written FROM scans";
 
 fn scan_from_row(r: &Row<'_>) -> rusqlite::Result<ScanRecord> {
     Ok(ScanRecord {
@@ -573,6 +582,8 @@ fn scan_from_row(r: &Row<'_>) -> rusqlite::Result<ScanRecord> {
         errors: r.get::<_, i64>(9)? as u64,
         current_path: r.get(10)?,
         pid: r.get(11)?,
+        phase: r.get(12)?,
+        written: r.get::<_, i64>(13)? as u64,
     })
 }
 

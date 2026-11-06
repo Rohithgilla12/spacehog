@@ -232,3 +232,22 @@ fn second_scanner_is_refused_while_lock_held() {
         spacehog_core::Error::ScanInProgress { scan_id: 42, .. }
     ));
 }
+
+#[test]
+fn running_scans_publish_their_phase_to_other_processes() {
+    let fx = fixture();
+    let state = tempfile::tempdir().unwrap();
+    let db = db_in(state.path());
+    let index = Index::open(&db).unwrap();
+    let id = index.begin_scan(&fx.root()).unwrap();
+    let progress = Progress::default();
+    progress.set_phase(spacehog_core::scan::Phase::Writing);
+    progress
+        .written
+        .store(1234, std::sync::atomic::Ordering::Relaxed);
+    index.update_progress(id, &progress.snapshot()).unwrap();
+    let reader = Index::open(&db).unwrap();
+    let rec = reader.scan(id).unwrap().unwrap();
+    assert_eq!(rec.phase.as_deref(), Some("writing"));
+    assert_eq!(rec.written, 1234);
+}
