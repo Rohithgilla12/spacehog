@@ -4,7 +4,9 @@ use std::time::Duration;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::error::Result;
-use crate::model::{Label, NodeFlags, NodeId, NodeInfo, NodeKind, ScanId, ScanRecord, ScanStatus};
+use crate::model::{
+    Label, Labels, NodeFlags, NodeId, NodeInfo, NodeKind, ScanId, ScanRecord, ScanStatus,
+};
 use crate::scan::{ProgressSnapshot, ScanTree};
 
 const MIGRATIONS: &[&str] = &[
@@ -195,7 +197,7 @@ impl Index {
         &mut self,
         scan: ScanId,
         tree: &ScanTree,
-        labels: Option<&[Label]>,
+        labels: Option<&Labels>,
         keep: usize,
         progress: Option<&crate::scan::Progress>,
     ) -> Result<()> {
@@ -218,7 +220,7 @@ impl Index {
                     p.written
                         .store(i as u64, std::sync::atomic::Ordering::Relaxed);
                 }
-                let label = labels.and_then(|l| l.get(i)).unwrap_or(&empty);
+                let label = labels.map_or(&empty, |l| l.get(i));
                 stmt.execute(params![
                     base + i as i64,
                     scan,

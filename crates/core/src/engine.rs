@@ -5,13 +5,13 @@ use std::time::{Duration, Instant};
 use crate::error::Result;
 use crate::index::Index;
 use crate::lock::ScanLock;
-use crate::model::{Label, ScanId, ScanRecord};
+use crate::model::{Labels, ScanId, ScanRecord};
 use crate::scan::{self, Phase, Progress, ScanOptions, ScanTree};
 
 /// Labels a freshly scanned tree before it is written. The categoriser
 /// implements this; a scan without one is written uncategorised.
 pub trait Labeler: Send + Sync {
-    fn label(&self, tree: &ScanTree) -> Vec<Label>;
+    fn label(&self, tree: &ScanTree) -> Labels;
 }
 
 pub struct ScanRequest {
@@ -128,7 +128,7 @@ fn body(req: &ScanRequest, started: Started, progress: Arc<Progress>) -> Result<
     lap(&mut timings.label_ms);
     timings.nodes = tree.nodes.len() as u64;
     progress.set_phase(Phase::Writing);
-    let written = index.finish_scan(scan_id, &tree, labels.as_deref(), req.keep, Some(&progress));
+    let written = index.finish_scan(scan_id, &tree, labels.as_ref(), req.keep, Some(&progress));
     progress.set_phase(Phase::Done);
     let _ = mirror.join();
     if let Err(e) = written {

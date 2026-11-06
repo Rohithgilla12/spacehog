@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::engine::Labeler;
-use crate::model::{Label, NodeKind};
+use crate::model::{Label, Labels, NodeKind};
 use crate::rules::{Rule, RuleSet, Safety, StaleBasis};
 use crate::scan::{FlatNode, ScanTree};
 
@@ -50,7 +50,7 @@ impl Categoriser {
 }
 
 impl Labeler for Categoriser {
-    fn label(&self, tree: &ScanTree) -> Vec<Label> {
+    fn label(&self, tree: &ScanTree) -> Labels {
         label_tree(&self.rules, tree)
     }
 }
@@ -198,17 +198,21 @@ fn ext_of(name: &str) -> Option<&str> {
     (!stem.is_empty() && !ext.is_empty()).then_some(ext)
 }
 
-struct Claim {
+struct Fallback {
     last_desc: u32,
-    label: Label,
+    inherited: u32,
 }
 
-pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Vec<Label> {
+pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Labels {
     let ctx = Ctx { tree };
     let n = tree.nodes.len();
-    let mut labels = vec![Label::default(); n];
+    let mut labels = Labels::new(n);
+    let other = labels.push(Label {
+        bucket: Some("other".into()),
+        ..Label::default()
+    });
     let mut dirs: Vec<(u32, PathBuf)> = Vec::new();
-    let mut fallbacks: Vec<Claim> = Vec::new();
+    let mut fallbacks: Vec<Fallback> = Vec::new();
     let mut i = 0u32;
     while (i as usize) < n {
         while dirs.last().is_some_and(|(d, _)| ctx.node(*d).last_desc < i) {
@@ -219,9 +223,8 @@ pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Vec<Label> {
         }
         let node = ctx.node(i);
         let is_dir = node.kind == NodeKind::Dir;
-        let parent_path = dirs.last().map(|(_, p)| p.as_path());
-        let path = match parent_path {
-            Some(p) => p.join(&*node.name),
+        let path = match dirs.last() {
+            Some((_, p)) => p.join(&*node.name),
             None => PathBuf::from(&*node.name),
         };
         let hits = {
@@ -245,7 +248,8 @@ pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Vec<Label> {
                 StaleBasis::SelfMtime => (Some(node.max_mtime), None),
                 StaleBasis::None => (None, None),
             };
-            let label = Label {
+            let safety = Some(ctx.safety(rule, i, &path));
+            let claim = labels.push(Label {
                 rule_id: Some(rule.id.clone()),
                 bucket: Some(rule.bucket.clone()),
                 claim: true,
@@ -254,36 +258,33 @@ pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Vec<Label> {
                 excl_disk: node.disk,
                 excl_apparent: node.apparent,
                 regen_hint: ctx.regen(rule, i),
-                safety: Some(ctx.safety(rule, i, &path)),
-            };
-            let inherited = Label {
-                rule_id: label.rule_id.clone(),
-                bucket: label.bucket.clone(),
-                safety: label.safety,
+                safety,
+            });
+            let inherited = labels.push(Label {
+                rule_id: Some(rule.id.clone()),
+                bucket: Some(rule.bucket.clone()),
+                safety,
                 ..Label::default()
-            };
+            });
+            labels.refs[i as usize] = claim;
             if rule.def.fallback && is_dir {
-                labels[i as usize] = label.clone();
-                fallbacks.push(Claim {
+                fallbacks.push(Fallback {
                     last_desc: node.last_desc,
-                    label: inherited,
+                    inherited,
                 });
                 dirs.push((i, path));
                 i += 1;
             } else {
-                labels[i as usize] = label;
-                for j in i + 1..=node.last_desc {
-                    labels[j as usize] = inherited.clone();
-                }
+                labels.refs[i as usize + 1..=node.last_desc as usize].fill(inherited);
                 i = node.last_desc + 1;
             }
             continue;
         }
 
-        if let Some(ctx_claim) = fallbacks.last() {
-            labels[i as usize] = ctx_claim.label.clone();
+        if let Some(f) = fallbacks.last() {
+            labels.refs[i as usize] = f.inherited;
         } else if !is_dir {
-            labels[i as usize].bucket = Some("other".into());
+            labels.refs[i as usize] = other;
         }
         if is_dir {
             dirs.push((i, path));
@@ -296,10 +297,10 @@ pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Vec<Label> {
 
 /// Makes each claim's `excl_*` cover only bytes no nested claim accounts for,
 /// so summing claims never double counts a fallback and what it contains.
-fn subtract_nested_claims(tree: &ScanTree, labels: &mut [Label]) {
+fn subtract_nested_claims(tree: &ScanTree, labels: &mut Labels) {
     let mut open: Vec<usize> = Vec::new();
     for i in 0..tree.nodes.len() {
-        if !labels[i].claim {
+        if !labels.get(i).claim {
             continue;
         }
         while open
@@ -310,8 +311,9 @@ fn subtract_nested_claims(tree: &ScanTree, labels: &mut [Label]) {
         }
         if let Some(&outer) = open.last() {
             let (d, a) = (tree.nodes[i].disk, tree.nodes[i].apparent);
-            labels[outer].excl_disk = labels[outer].excl_disk.saturating_sub(d);
-            labels[outer].excl_apparent = labels[outer].excl_apparent.saturating_sub(a);
+            let outer = labels.get_mut(outer);
+            outer.excl_disk = outer.excl_disk.saturating_sub(d);
+            outer.excl_apparent = outer.excl_apparent.saturating_sub(a);
         }
         open.push(i);
     }

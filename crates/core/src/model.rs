@@ -169,3 +169,37 @@ pub struct Label {
     pub regen_hint: Option<std::sync::Arc<str>>,
     pub safety: Option<crate::rules::Safety>,
 }
+
+/// Labels for a whole tree. Most nodes share an inherited label with the rest
+/// of their claim, so nodes index into a palette instead of owning a copy.
+#[derive(Debug, Clone, Default)]
+pub struct Labels {
+    pub palette: Vec<Label>,
+    pub refs: Vec<u32>,
+}
+
+impl Labels {
+    pub fn new(nodes: usize) -> Self {
+        Self {
+            palette: vec![Label::default()],
+            refs: vec![0; nodes],
+        }
+    }
+
+    pub fn push(&mut self, label: Label) -> u32 {
+        self.palette.push(label);
+        self.palette.len() as u32 - 1
+    }
+
+    pub fn get(&self, node: usize) -> &Label {
+        &self.palette[self.refs[node] as usize]
+    }
+
+    /// Mutable access to a node's label. Only claims own a unique palette
+    /// entry, so this is for claim nodes.
+    pub fn get_mut(&mut self, node: usize) -> &mut Label {
+        debug_assert!(self.get(node).claim, "only claim labels are unique");
+        let i = self.refs[node] as usize;
+        &mut self.palette[i]
+    }
+}
