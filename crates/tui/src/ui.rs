@@ -130,9 +130,15 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
                 stale_days: app.ctx.config.stale_days,
             },
         ),
-        View::Treemap => {
-            treemap::render(frame, area, &mut session.treemap, &app.ctx, t, app.toggles)
-        }
+        View::Treemap => treemap::render(
+            frame,
+            area,
+            &mut session.treemap,
+            &app.ctx,
+            t,
+            app.toggles,
+            &mut app.hits,
+        ),
         View::Categories => categories::render(frame, area, &mut session.categories, &app.ctx, t),
         View::Cleanup => cleanup::render(
             frame,

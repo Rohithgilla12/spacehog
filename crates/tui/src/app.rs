@@ -64,6 +64,8 @@ pub enum Hit {
     Donut,
     /// A row in the current view's list.
     Row(usize),
+    /// A breadcrumb item in the trail.
+    Crumb(usize),
 }
 
 /// Data for one finished scan and the per-view state built from it.
@@ -372,6 +374,12 @@ impl App {
                 Ok(())
             }
             MouseEventKind::Down(MouseButton::Left) => self.click(pos),
+            MouseEventKind::Down(MouseButton::Right) => {
+                if self.view == View::Treemap {
+                    self.dispatch(Action::ZoomOut)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -430,6 +438,10 @@ impl App {
                 }
             }
             View::Treemap => {
+                if let Some(Hit::Crumb(i)) = hit {
+                    s.treemap.zoom_out_to(i);
+                    return Ok(());
+                }
                 if let Some(i) = s.treemap.hit(pos.x, pos.y) {
                     s.treemap.cursor = i;
                     return self.dispatch(Action::ZoomIn);
@@ -585,7 +597,15 @@ impl App {
                 self.filter.reset();
                 self.refresh()?;
             }
-            Action::Back => self.view = View::Overview,
+            Action::Back => {
+                if self.view == View::Treemap
+                    && let Some(s) = self.session.as_mut()
+                    && s.treemap.zoom_out()
+                {
+                    return Ok(());
+                }
+                self.view = View::Overview;
+            }
             Action::Help => self.overlay = Some(Overlay::Help),
             Action::Palette => self.overlay = Some(Overlay::Palette(Palette::default())),
             Action::Filter => self.overlay = Some(Overlay::Filter),
@@ -720,6 +740,9 @@ impl App {
                     }
                     (View::Treemap, Action::ZoomOut) => {
                         s.treemap.zoom_out();
+                    }
+                    (View::Treemap, Action::Top) => {
+                        s.treemap.zoom_out_to(0);
                     }
                     (View::Treemap, Action::DeeperMap) => s.treemap.set_depth(1),
                     (View::Treemap, Action::ShallowerMap) => s.treemap.set_depth(-1),

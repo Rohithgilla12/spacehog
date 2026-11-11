@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use spacehog_core::Index;
@@ -12,7 +12,7 @@ use spacehog_core::config::Config;
 use spacehog_core::proposals::{Actor, ProposalStatus, ProposeRequest};
 use spacehog_core::report::{self, TopQuery};
 use spacehog_core::rules::RuleSet;
-use spacehog_tui::app::Overlay;
+use spacehog_tui::app::{Hit, Overlay};
 use spacehog_tui::categories::Row;
 use spacehog_tui::cleanup::{Phase, Tab};
 use spacehog_tui::keys::View;
@@ -889,6 +889,190 @@ fn treemap_zooms_in_and_out_with_the_breadcrumb() {
         "code",
         "zooming out lands on the folder it came from"
     );
+}
+
+#[test]
+fn treemap_esc_zooms_out_to_parent_and_exits_at_root() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    press(&mut app, KeyCode::Char('3'));
+    assert_eq!(app.view, View::Treemap);
+    let s = screen(&mut app, 120, 36);
+    assert_eq!(breadcrumb(&s).split_whitespace().next(), Some("~"));
+
+    // Zoom into code
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code"), "{s}");
+
+    // Zoom into rs
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code › rs"), "{s}");
+
+    // Press Esc: zooms out to code, stays in Treemap view
+    press(&mut app, KeyCode::Esc);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    assert_eq!(app.view, View::Treemap);
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code"), "{s}");
+    assert!(!breadcrumb(&s).contains("rs"), "{s}");
+
+    // Press Esc: zooms out to root (~), stays in Treemap view
+    press(&mut app, KeyCode::Esc);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    assert_eq!(app.view, View::Treemap);
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~"), "{s}");
+    assert!(!breadcrumb(&s).contains("code"), "{s}");
+
+    // Press Esc at root: exits to Overview view
+    press(&mut app, KeyCode::Esc);
+    app.tick().unwrap();
+    assert_eq!(app.view, View::Overview);
+}
+
+#[test]
+fn treemap_keyboard_shortcuts_zoom_out_and_jump_to_top() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    press(&mut app, KeyCode::Char('3'));
+    screen(&mut app, 120, 36);
+
+    // Zoom into code, then rs
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code › rs"), "{s}");
+
+    // Press 'u': zooms out one level to code
+    press(&mut app, KeyCode::Char('u'));
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code"), "{s}");
+    assert!(!breadcrumb(&s).contains("rs"), "{s}");
+
+    // Zoom back into rs
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+
+    // Press 'g': jumps straight to top (root ~)
+    press(&mut app, KeyCode::Char('g'));
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~"), "{s}");
+    assert!(!breadcrumb(&s).contains("code"), "{s}");
+
+    // Zoom in again and test Home key
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    assert!(breadcrumb(&screen(&mut app, 120, 36)).starts_with("~ › code › rs"));
+
+    press(&mut app, KeyCode::Home);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~"), "{s}");
+    assert!(!breadcrumb(&s).contains("code"), "{s}");
+}
+
+#[test]
+fn treemap_breadcrumb_and_right_click_zoom_out() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    press(&mut app, KeyCode::Char('3'));
+    screen(&mut app, 120, 36);
+
+    // Zoom into code, then rs
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code › rs"), "{s}");
+
+    // Breadcrumb clicks: click on 'code' crumb (Hit::Crumb(1))
+    let (code_rect, _) = *app
+        .hits
+        .iter()
+        .find(|(_, h)| *h == Hit::Crumb(1))
+        .expect("code breadcrumb is clickable");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: code_rect.x,
+        row: code_rect.y,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~ › code"), "{s}");
+    assert!(!breadcrumb(&s).contains("rs"), "{s}");
+
+    // Click on '~' crumb (Hit::Crumb(0)) to zoom out to root
+    let (root_rect, _) = *app
+        .hits
+        .iter()
+        .find(|(_, h)| *h == Hit::Crumb(0))
+        .expect("root breadcrumb is clickable");
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: root_rect.x,
+        row: root_rect.y,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~"), "{s}");
+    assert!(!breadcrumb(&s).contains("code"), "{s}");
+
+    // Test right-click: zoom into code, right-click anywhere on the map area
+    screen(&mut app, 120, 36);
+    press(&mut app, KeyCode::Enter);
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    screen(&mut app, 120, 36);
+    let area = session(&app).treemap.area;
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: area.x + 5,
+        row: area.y + 5,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+    std::thread::sleep(spacehog_tui::treemap::ZOOM + Duration::from_millis(20));
+    app.tick().unwrap();
+    let s = screen(&mut app, 120, 36);
+    assert!(breadcrumb(&s).starts_with("~"), "{s}");
+    assert!(!breadcrumb(&s).contains("code"), "{s}");
 }
 
 #[test]

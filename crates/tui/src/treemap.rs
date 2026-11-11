@@ -17,6 +17,7 @@ use spacehog_core::human;
 use spacehog_core::model::{NodeId, NodeInfo, NodeKind};
 use spacehog_core::report::Item;
 
+use crate::app::Hit;
 use crate::data::{self, Ctx, Toggles};
 use crate::theme::{self, Rgb, Theme};
 
@@ -540,11 +541,12 @@ impl TreemapState {
         true
     }
 
-    pub fn zoom_out(&mut self) -> bool {
-        if self.trail.len() < 2 {
+    pub fn zoom_out_to(&mut self, idx: usize) -> bool {
+        if idx >= self.trail.len().saturating_sub(1) {
             return false;
         }
-        let child = self.trail.pop().expect("checked length");
+        let child = self.trail[idx + 1].clone();
+        self.trail.truncate(idx + 1);
         self.zoom = Some(Zoom {
             from: ZoomFrom::Child(child.id),
             started: Instant::now(),
@@ -553,6 +555,13 @@ impl TreemapState {
         self.focus = Some(child.id);
         self.hover = None;
         true
+    }
+
+    pub fn zoom_out(&mut self) -> bool {
+        if self.trail.len() < 2 {
+            return false;
+        }
+        self.zoom_out_to(self.trail.len() - 2)
     }
 
     /// Opens the map on `node`'s folder, keeping the trail from the root.
@@ -715,6 +724,7 @@ pub fn render(
     ctx: &Ctx,
     theme: &Theme,
     t: Toggles,
+    hits: &mut Vec<(Rect, Hit)>,
 ) {
     let [crumb_area, map, info] = Layout::vertical([
         Constraint::Length(1),
@@ -732,6 +742,26 @@ pub fn render(
         .areas(crumb_area);
     frame.render_widget(Paragraph::new(Line::from(crumbs)), l);
     frame.render_widget(Paragraph::new(Span::styled(depth, theme.dim())), r);
+
+    let max_x = l.x + l.width;
+    let mut cx = l.x;
+    let root_label = ctx.tilde(&s.trail[0].path);
+    let w0 = (root_label.chars().count() as u16).min(max_x.saturating_sub(cx));
+    if w0 > 0 {
+        hits.push((Rect::new(cx, l.y, w0, 1), Hit::Crumb(0)));
+        cx += w0;
+    }
+    for (i, node) in s.trail.iter().skip(1).enumerate() {
+        cx = cx.saturating_add(3);
+        if cx >= max_x {
+            break;
+        }
+        let w = (node.name.chars().count() as u16).min(max_x.saturating_sub(cx));
+        if w > 0 {
+            hits.push((Rect::new(cx, l.y, w, 1), Hit::Crumb(i + 1)));
+            cx += w;
+        }
+    }
 
     s.area = map;
     let size = Rect::new(0, 0, map.width, map.height.saturating_mul(2));

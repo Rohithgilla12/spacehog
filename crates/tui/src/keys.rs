@@ -235,11 +235,17 @@ pub const EXPLORER: Keymap = &[
 
 pub const TREEMAP: Keymap = &[
     (Key::code(KeyCode::Up), Action::Up),
+    (Key::ch('k'), Action::Up),
     (Key::code(KeyCode::Down), Action::Down),
+    (Key::ch('j'), Action::Down),
     (Key::code(KeyCode::Left), Action::Left),
     (Key::code(KeyCode::Right), Action::Right),
     (Key::code(KeyCode::Enter), Action::ZoomIn),
     (Key::code(KeyCode::Backspace), Action::ZoomOut),
+    (Key::code(KeyCode::Esc), Action::Back),
+    (Key::ch('u'), Action::ZoomOut),
+    (Key::ch('g'), Action::Top),
+    (Key::code(KeyCode::Home), Action::Top),
     (Key::ch('+'), Action::DeeperMap),
     (Key::ch('='), Action::DeeperMap),
     (Key::ch('-'), Action::ShallowerMap),
