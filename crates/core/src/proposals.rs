@@ -159,7 +159,7 @@ pub fn refusal(
     if node.flags.has(NodeFlags::ERROR) {
         return Ok(Err("could not be read during the scan".into()));
     }
-    let item = Item::from_node(rules, &node);
+    let item = Item::for_cleanup(rules, &node);
     let vcs_aware = item.bucket == "vcs";
     if node.kind == NodeKind::Dir
         && !vcs_aware
