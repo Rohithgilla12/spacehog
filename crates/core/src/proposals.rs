@@ -200,8 +200,19 @@ pub fn refusal(
         }
         _ => {}
     }
-    if is_worktree && let Some(reason) = crate::worktree::removal_refusal(path) {
-        return Ok(Err(reason));
+    if is_worktree {
+        let rebuildable = |p: &Path| {
+            index.find(node.scan_id, p).ok().flatten().is_some_and(|n| {
+                let rule = n.rule_id.as_deref().and_then(|id| rules.get(id));
+                n.claim
+                    && rule.is_some_and(|r| !r.def.worktree)
+                    && rules.effective_safety(&n.path, n.rule_id.as_deref(), n.safety)
+                        != Safety::Protected
+            })
+        };
+        if let Some(reason) = crate::worktree::removal_refusal(path, rebuildable) {
+            return Ok(Err(reason));
+        }
     }
     Ok(Ok(item))
 }

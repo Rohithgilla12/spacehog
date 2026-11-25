@@ -611,3 +611,14 @@ fn main_checkout_is_never_proposable() {
     let reason = w.rejection(&w.repo);
     assert!(reason.starts_with("contains a .git directory"), "{reason}");
 }
+
+#[test]
+fn ignored_secrets_block_removal_but_claimed_build_output_does_not() {
+    let w = merged_worktree();
+    fs::write(w.wt.join(".gitignore"), "target/\n.env\n").unwrap();
+    common::git(&w.wt, &["commit", "-qam", "ignore env"]);
+    common::git(&w.repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
+    fs::write(w.wt.join(".env"), "SECRET=1").unwrap();
+    let reason = w.rejection(&w.wt);
+    assert!(reason.contains("such as .env"), "{reason}");
+}
