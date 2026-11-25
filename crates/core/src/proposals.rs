@@ -173,6 +173,7 @@ pub fn refusal(
     let vcs_aware = item.bucket == "vcs";
     if node.kind == NodeKind::Dir
         && !vcs_aware
+        && !is_worktree
         && index.find(node.scan_id, &path.join(".git"))?.is_some()
     {
         return Ok(Err(

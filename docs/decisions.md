@@ -85,3 +85,18 @@ Focus mode reuses the existing bucket selection: the slice lifts out, the rest f
 
 Two rings and the whole-disk ring stay unbuilt. Two rings would replace the safety bar, but the inner and outer rings divide the same bytes independently, so an inner arc does not sit under the buckets it belongs to and readers expect it to. The whole-disk ring makes a nearly full disk vivid but shrinks every bucket; the gauge beside the headline already carries that number.
 
+## Git worktrees: merged means local git says so
+
+Agent tools leave a linked worktree per task, and on one machine three of them held 10.7 GB (2026-11-25). Removing a worktree loses only uncommitted work, since its commits live in the main repository, so cleanup needs to know the worktree is clean and its work is merged.
+
+Three ways to answer "merged" were weighed:
+
+| | Merged check | Trade-off |
+|---|---|---|
+| **Chosen** | Local git: HEAD is an ancestor of the default branch, or `git merge-tree --write-tree` of HEAD into it yields the default branch's own tree | No network. Catches merge, fast-forward, squash, and rebase merges. Only as fresh as the local default branch. |
+| Rejected | `gh pr view --json state` | Answers "was the PR merged" literally, but breaks the no-network promise, needs `gh` logged in, and covers GitHub only. |
+| Rejected | Local by default, GitHub behind a flag | Two code paths, and the promise becomes "no network unless you opt in". |
+
+An unpulled default branch makes a merged PR look unmerged, and spacehog refuses. That is the cheap direction to be wrong in. The check needs git 2.38 or newer for `merge-tree --write-tree`; on older git the tree test fails and only ancestry counts. `merge-tree --write-tree` leaves one unreferenced tree object in the main repository's object store, which `git gc` removes.
+
+The check runs inside `refusal()`, so it runs at proposal time and again right before the executor trashes the worktree. Its answer is not stored in the index, because a worktree can turn dirty between a scan and a cleanup. spacehog runs the system `git` rather than linking `gix`: it adds no dependency and honours the user's git config.
