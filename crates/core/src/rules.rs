@@ -114,6 +114,9 @@ pub struct RuleDef {
     pub fallback: bool,
     pub promote: Option<Promote>,
     pub icon: Option<String>,
+    /// Holds only for a linked git worktree: a `.git` file pointing into a repo's `worktrees/`.
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -140,6 +140,7 @@ mail = "user-data"
 messages = "user-data"
 device-backups = "user-data"
 vcs = "vcs"
+worktree = "vcs"
 other = "other"
 
 # Containers and VMs
@@ -816,6 +817,17 @@ kind = "any"
 safety = "regenerable"
 regen = "recreated on next run"
 stale = "project"
+
+[[rule]]
+id = "git-worktree"
+category = "worktree"
+label = "Git worktree"
+name = ["*"]
+worktree = true
+safety = "review"
+regen = "git worktree add <path> <branch>; git worktree prune drops the stale entry once you no longer need undo"
+stale = "self"
+fallback = true
 
 [[rule]]
 id = "project"

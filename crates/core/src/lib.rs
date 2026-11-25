@@ -17,6 +17,7 @@ pub mod report;
 pub mod rules;
 pub mod scan;
 pub mod status;
+pub mod worktree;
 
 pub use error::{Error, Result};
 pub use index::Index;

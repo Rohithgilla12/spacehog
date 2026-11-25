@@ -362,3 +362,55 @@ fn the_documented_example_rules_load_and_apply() {
         Safety::Cache
     );
 }
+
+fn rule_of(index: &spacehog_core::Index, p: &std::path::Path) -> (Option<String>, Option<Safety>) {
+    let n = index.find_in_latest(p).unwrap().unwrap();
+    (n.rule_id, n.safety)
+}
+
+#[test]
+fn linked_worktree_is_claimed_and_its_build_output_stays_separate() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (repo, wt) = common::repo_with_worktree(&root, "x");
+    std::fs::write(wt.join("Cargo.toml"), "[package]\n").unwrap();
+    common::write(&wt.join("target/debug/app"), 9000);
+    let state = tempfile::tempdir().unwrap();
+    let (index, _, _) = scan(&root, state.path());
+    assert_eq!(
+        rule_of(&index, &wt),
+        (Some("git-worktree".into()), Some(Safety::Review))
+    );
+    assert_eq!(
+        rule_of(&index, &wt.join("target")).0.as_deref(),
+        Some("cargo-target")
+    );
+    assert_eq!(rule_of(&index, &repo).0.as_deref(), Some("project"));
+}
+
+#[test]
+fn submodule_git_file_is_not_a_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    common::write(&root.join(".git/modules/sub/HEAD"), 20);
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/.git"), "gitdir: ../.git/modules/sub\n").unwrap();
+    std::fs::write(root.join("sub/lib.rs"), "").unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let (index, _, _) = scan(&root, state.path());
+    assert_eq!(
+        rule_of(&index, &root.join("sub")).0.as_deref(),
+        Some("project")
+    );
+}
+
+#[test]
+fn relative_gitdir_worktree_is_claimed() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let (_, wt) = common::repo_with_worktree(&root, "rel");
+    std::fs::write(wt.join(".git"), "gitdir: ../../../.git/worktrees/rel\n").unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let (index, _, _) = scan(&root, state.path());
+    assert_eq!(rule_of(&index, &wt).0.as_deref(), Some("git-worktree"));
+}
