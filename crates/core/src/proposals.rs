@@ -206,8 +206,10 @@ pub fn refusal(
                 let rule = n.rule_id.as_deref().and_then(|id| rules.get(id));
                 n.claim
                     && rule.is_some_and(|r| !r.def.worktree)
-                    && rules.effective_safety(&n.path, n.rule_id.as_deref(), n.safety)
-                        != Safety::Protected
+                    && matches!(
+                        rules.effective_safety(&n.path, n.rule_id.as_deref(), n.safety),
+                        Safety::Regenerable | Safety::Cache
+                    )
             })
         };
         if let Some(reason) = crate::worktree::removal_refusal(path, rebuildable) {

@@ -173,13 +173,13 @@ fn skip_worktree_edit_refuses() {
     );
 }
 
-#[test]
-fn dirty_submodule_refuses_even_when_config_ignores_submodules() {
-    let f = fixture();
+/// Adds a submodule at `lib`, with `lib_ignore` as its own .gitignore, and merges it.
+fn with_merged_submodule(f: &Fixture, lib_ignore: &str) {
     let lib = f.repo.parent().unwrap().join("lib");
     fs::create_dir_all(&lib).unwrap();
     git(&lib, &["init", "-q"]);
     fs::write(lib.join("lib.rs"), "fn a() {}\n").unwrap();
+    fs::write(lib.join(".gitignore"), lib_ignore).unwrap();
     git(&lib, &["add", "."]);
     git(&lib, &["commit", "-qm", "lib"]);
     git(
@@ -196,6 +196,12 @@ fn dirty_submodule_refuses_even_when_config_ignores_submodules() {
     );
     git(&f.wt, &["commit", "-qm", "add lib"]);
     git(&f.repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
+}
+
+#[test]
+fn dirty_submodule_refuses_even_when_config_ignores_submodules() {
+    let f = fixture();
+    with_merged_submodule(&f, "");
     git(&f.repo, &["config", "diff.ignoreSubmodules", "all"]);
     fs::write(f.wt.join("lib/lib.rs"), "fn b() {}\n").unwrap();
     let reason = removal_refusal(&f.wt, no_rebuild).unwrap();
@@ -208,4 +214,24 @@ fn partial_clone_refuses() {
     git(&f.repo, &["config", "remote.origin.promisor", "true"]);
     let reason = removal_refusal(&f.wt, no_rebuild).unwrap();
     assert!(reason.contains("partial clone"), "{reason}");
+}
+
+#[test]
+fn ignored_file_inside_a_submodule_refuses() {
+    let f = fixture();
+    with_merged_submodule(&f, ".env\n");
+    fs::write(f.wt.join("lib/.env"), "SECRET=1").unwrap();
+    let reason = removal_refusal(&f.wt, no_rebuild).unwrap();
+    assert!(reason.contains("submodule lib"), "{reason}");
+}
+
+#[test]
+fn skip_worktree_edit_inside_a_submodule_refuses() {
+    let f = fixture();
+    with_merged_submodule(&f, "");
+    let lib = f.wt.join("lib");
+    git(&lib, &["update-index", "--skip-worktree", "lib.rs"]);
+    fs::write(lib.join("lib.rs"), "fn b() {}\n").unwrap();
+    let reason = removal_refusal(&f.wt, no_rebuild).unwrap();
+    assert!(reason.contains("submodule lib"), "{reason}");
 }

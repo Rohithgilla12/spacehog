@@ -482,16 +482,22 @@ struct WtWorld {
 /// A repo with a worktree holding committed source and ignored build output,
 /// its branch merged into main, scanned from the repo's parent.
 fn merged_worktree() -> WtWorld {
+    merged_worktree_with("", |_| {})
+}
+
+/// A merged worktree with `ignore` appended to its .gitignore and `extra` run on it before the scan.
+fn merged_worktree_with(ignore: &str, extra: impl FnOnce(&Path)) -> WtWorld {
     let dir = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();
     let (repo, wt) = common::repo_with_worktree(&root, "x");
-    fs::write(wt.join(".gitignore"), "target/\n").unwrap();
+    fs::write(wt.join(".gitignore"), format!("target/\n{ignore}")).unwrap();
     fs::write(wt.join("Cargo.toml"), "[package]\n").unwrap();
     write(&wt.join("src/main.rs"), 200);
     common::git(&wt, &["add", "."]);
     common::git(&wt, &["commit", "-qm", "work"]);
     common::git(&repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
     write(&wt.join("target/debug/app"), 9000);
+    extra(&wt);
     let state = tempfile::tempdir().unwrap();
     let (index, rules, _) = scan(&root, state.path());
     WtWorld {
@@ -621,4 +627,11 @@ fn ignored_secrets_block_removal_but_claimed_build_output_does_not() {
     fs::write(w.wt.join(".env"), "SECRET=1").unwrap();
     let reason = w.rejection(&w.wt);
     assert!(reason.contains("such as .env"), "{reason}");
+}
+
+#[test]
+fn ignored_files_a_review_rule_claims_still_block_removal() {
+    let w = merged_worktree_with("*.zip\n", |wt| write(&wt.join("backup.zip"), 500));
+    let reason = w.rejection(&w.wt);
+    assert!(reason.contains("such as backup.zip"), "{reason}");
 }

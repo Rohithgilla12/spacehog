@@ -97,6 +97,11 @@ pub fn removal_refusal(dir: &Path, rebuildable: impl Fn(&Path) -> bool) -> Optio
             "has files git status cannot see (assume-unchanged or skip-worktree), such as {hidden}"
         ));
     }
+    if let Some(sub) = initialised_submodule(dir) {
+        return Some(format!(
+            "has submodule {sub} checked out, whose ignored and hidden files spacehog cannot check; remove it with git"
+        ));
+    }
     let bases = default_bases(dir);
     let Some(first) = bases.first() else {
         return Some("has no main or master branch to check it was merged into".into());
@@ -157,6 +162,23 @@ fn hidden_from_status(dir: &Path) -> Option<String> {
         .filter(|e| e.len() > 2)
         .find(|e| e[0].is_ascii_lowercase() || e[0] == b'S')
         .map(|e| String::from_utf8_lossy(&e[2..]).into_owned())
+}
+
+/// A submodule with files on disk. Status and ls-files stop at its gitlink,
+/// so its own ignored and skip-worktree files would go unseen.
+fn initialised_submodule(dir: &Path) -> Option<String> {
+    let Ok(out) = git(dir, &["ls-files", "--stage", "-z"]) else {
+        return Some("(git ls-files failed)".into());
+    };
+    if !out.status.success() {
+        return Some("(git ls-files failed)".into());
+    }
+    out.stdout
+        .split(|&b| b == 0)
+        .filter(|e| e.starts_with(b"160000 "))
+        .filter_map(|e| e.splitn(2, |&b| b == b'\t').nth(1))
+        .map(|p| String::from_utf8_lossy(p).into_owned())
+        .find(|p| fs::read_dir(dir.join(p)).is_ok_and(|mut d| d.next().is_some()))
 }
 
 /// The default branch, local first, then its remote-tracking ref. Prefers what
