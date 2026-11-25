@@ -160,6 +160,16 @@ pub fn refusal(
         return Ok(Err("could not be read during the scan".into()));
     }
     let item = Item::for_cleanup(rules, &node);
+    let is_worktree = node
+        .rule_id
+        .as_deref()
+        .and_then(|id| rules.get(id))
+        .is_some_and(|r| r.def.worktree);
+    if is_worktree && !node.claim {
+        return Ok(Err(
+            "is inside a git worktree; clean the whole worktree instead".into(),
+        ));
+    }
     let vcs_aware = item.bucket == "vcs";
     if node.kind == NodeKind::Dir
         && !vcs_aware
@@ -188,6 +198,9 @@ pub fn refusal(
             }
         }
         _ => {}
+    }
+    if is_worktree && let Some(reason) = crate::worktree::removal_refusal(path) {
+        return Ok(Err(reason));
     }
     Ok(Ok(item))
 }
