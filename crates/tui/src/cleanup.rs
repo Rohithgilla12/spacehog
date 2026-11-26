@@ -296,7 +296,7 @@ impl CleanupState {
         self.queue = queue
             .iter()
             .filter_map(|p| ctx.index.find_in_latest(p).transpose())
-            .map(|n| n.map(|n| Entry::from_item(&Item::from_node(&ctx.rules, &n))))
+            .map(|n| n.map(|n| Entry::from_item(&Item::for_cleanup(&ctx.rules, &n))))
             .collect::<spacehog_core::Result<_>>()?;
         self.clamp();
         Ok(())

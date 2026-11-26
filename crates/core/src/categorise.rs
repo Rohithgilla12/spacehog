@@ -86,8 +86,16 @@ impl Ctx<'_> {
         self.children(i).any(|c| set.is_match(&*self.node(c).name))
     }
 
-    fn rule_holds(&self, rule: &Rule, i: u32) -> bool {
+    fn rule_holds(&self, rule: &Rule, i: u32, path: &Path) -> bool {
         let n = self.node(i);
+        if rule.def.worktree {
+            let git_file = self
+                .child_named(i, ".git")
+                .is_some_and(|g| self.node(g).kind == NodeKind::File);
+            if !git_file || !crate::worktree::is_linked(path) {
+                return false;
+            }
+        }
         if let Some(sib) = &rule.sibling {
             let Some(p) = n.parent else { return false };
             if !self
@@ -240,7 +248,7 @@ pub fn label_tree(rules: &RuleSet, tree: &ScanTree) -> Labels {
             .candidates(&hits, is_dir)
             .into_iter()
             .map(|r| &rules.rules[r])
-            .find(|r| ctx.rule_holds(r, i));
+            .find(|r| ctx.rule_holds(r, i, &path));
 
         if let Some(rule) = matched {
             let (stale_ref, project_root) = match rule.def.stale {

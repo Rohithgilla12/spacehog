@@ -159,10 +159,21 @@ pub fn refusal(
     if node.flags.has(NodeFlags::ERROR) {
         return Ok(Err("could not be read during the scan".into()));
     }
-    let item = Item::from_node(rules, &node);
+    let item = Item::for_cleanup(rules, &node);
+    let is_worktree = node
+        .rule_id
+        .as_deref()
+        .and_then(|id| rules.get(id))
+        .is_some_and(|r| r.def.worktree);
+    if is_worktree && !node.claim {
+        return Ok(Err(
+            "is inside a git worktree; clean the whole worktree instead".into(),
+        ));
+    }
     let vcs_aware = item.bucket == "vcs";
     if node.kind == NodeKind::Dir
         && !vcs_aware
+        && !is_worktree
         && index.find(node.scan_id, &path.join(".git"))?.is_some()
     {
         return Ok(Err(
@@ -188,6 +199,22 @@ pub fn refusal(
             }
         }
         _ => {}
+    }
+    if is_worktree {
+        let rebuildable = |p: &Path| {
+            index.find(node.scan_id, p).ok().flatten().is_some_and(|n| {
+                let rule = n.rule_id.as_deref().and_then(|id| rules.get(id));
+                n.claim
+                    && rule.is_some_and(|r| !r.def.worktree)
+                    && matches!(
+                        rules.effective_safety(&n.path, n.rule_id.as_deref(), n.safety),
+                        Safety::Regenerable | Safety::Cache
+                    )
+            })
+        };
+        if let Some(reason) = crate::worktree::removal_refusal(path, rebuildable) {
+            return Ok(Err(reason));
+        }
     }
     Ok(Ok(item))
 }

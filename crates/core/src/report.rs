@@ -67,6 +67,16 @@ impl Item {
             node_id: n.id,
         }
     }
+
+    /// The item as cleanup sees it: deleting a claim frees every claim nested in it too.
+    pub fn for_cleanup(rules: &RuleSet, n: &NodeInfo) -> Self {
+        Self {
+            size: n.disk_size,
+            size_human: human::bytes(n.disk_size),
+            apparent_size: n.apparent_size,
+            ..Self::from_node(rules, n)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]

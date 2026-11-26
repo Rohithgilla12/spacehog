@@ -205,3 +205,23 @@ fn auto_approve_never_covers_permanent() {
         Some("changed my mind")
     );
 }
+
+#[test]
+fn proposing_a_fallback_claim_counts_its_whole_subtree() {
+    let (_d, h) = home();
+    let state = tempfile::tempdir().unwrap();
+    let (index, rules, _) = scan(&h, state.path());
+    let downloads = index.find_in_latest(&h.join("Downloads")).unwrap().unwrap();
+    let r = index
+        .propose(
+            &rules,
+            &Config::default(),
+            Actor::User,
+            &req(vec![h.join("Downloads")]),
+        )
+        .unwrap();
+    assert!(r.rejected.is_empty(), "rejected {:?}", r.rejected);
+    assert!(downloads.disk_size > downloads.excl_disk.unwrap());
+    assert_eq!(r.total_bytes, downloads.disk_size);
+    assert_eq!(r.accepted[0].apparent_size, downloads.apparent_size);
+}

@@ -468,3 +468,170 @@ fn rejected_and_executed_proposals_cannot_run_again() {
             .contains("executed")
     );
 }
+
+struct WtWorld {
+    _dir: tempfile::TempDir,
+    _state: tempfile::TempDir,
+    trash_dir: tempfile::TempDir,
+    repo: PathBuf,
+    wt: PathBuf,
+    index: Index,
+    rules: std::sync::Arc<RuleSet>,
+}
+
+/// A repo with a worktree holding committed source and ignored build output,
+/// its branch merged into main, scanned from the repo's parent.
+fn merged_worktree() -> WtWorld {
+    merged_worktree_with("", |_| {})
+}
+
+/// A merged worktree with `ignore` appended to its .gitignore and `extra` run on it before the scan.
+fn merged_worktree_with(ignore: &str, extra: impl FnOnce(&Path)) -> WtWorld {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let (repo, wt) = common::repo_with_worktree(&root, "x");
+    fs::write(wt.join(".gitignore"), format!("target/\n{ignore}")).unwrap();
+    fs::write(wt.join("Cargo.toml"), "[package]\n").unwrap();
+    write(&wt.join("src/main.rs"), 200);
+    common::git(&wt, &["add", "."]);
+    common::git(&wt, &["commit", "-qm", "work"]);
+    common::git(&repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
+    write(&wt.join("target/debug/app"), 9000);
+    extra(&wt);
+    let state = tempfile::tempdir().unwrap();
+    let (index, rules, _) = scan(&root, state.path());
+    WtWorld {
+        _dir: dir,
+        _state: state,
+        trash_dir: tempfile::tempdir().unwrap(),
+        repo,
+        wt,
+        index,
+        rules,
+    }
+}
+
+impl WtWorld {
+    fn propose(&self, path: &Path) -> spacehog_core::proposals::ProposeResult {
+        self.index
+            .propose(
+                &self.rules,
+                &Config::default(),
+                Actor::User,
+                &ProposeRequest {
+                    paths: vec![path.to_path_buf()],
+                    rationale: "test".into(),
+                    agent: None,
+                    mode: None,
+                },
+            )
+            .unwrap()
+    }
+
+    fn execute(
+        &self,
+        r: &spacehog_core::proposals::ProposeResult,
+    ) -> spacehog_core::cleanup::ExecutionReport {
+        self.index
+            .execute(
+                &self.rules,
+                &Config::default(),
+                &Trash::Rename(self.trash_dir.path().to_path_buf()),
+                &ExecuteRequest {
+                    proposal_id: r.proposal_id.as_deref().unwrap(),
+                    confirm: &r.total_human,
+                    actor: Actor::User,
+                },
+            )
+            .unwrap()
+    }
+
+    fn rejection(&self, path: &Path) -> String {
+        let r = self.propose(path);
+        assert!(r.accepted.is_empty(), "{} was accepted", path.display());
+        r.rejected[0].reason.clone()
+    }
+}
+
+#[test]
+fn merged_worktree_is_trashed_and_undo_restores_a_working_checkout() {
+    let w = merged_worktree();
+    let r = w.propose(&w.wt);
+    assert!(r.rejected.is_empty(), "rejected {:?}", r.rejected);
+    let report = w.execute(&r);
+    assert_eq!(report.results[0].outcome, Outcome::Trashed);
+    assert!(!w.wt.exists());
+    let restored = w.index.undo(&report.journal_id).unwrap();
+    assert_eq!(restored[0].outcome, Outcome::Restored);
+    common::git(&w.wt, &["status"]);
+    let list = common::git(&w.repo, &["worktree", "list", "--porcelain"]);
+    assert!(list.contains(w.wt.to_str().unwrap()), "{list}");
+}
+
+#[test]
+fn dirty_worktree_is_rejected_at_propose() {
+    let w = merged_worktree();
+    fs::write(w.wt.join("notes.txt"), "wip").unwrap();
+    let reason = w.rejection(&w.wt);
+    assert!(reason.contains("uncommitted"), "{reason}");
+}
+
+#[test]
+fn worktree_that_turns_dirty_after_propose_is_skipped() {
+    let w = merged_worktree();
+    let r = w.propose(&w.wt);
+    assert!(r.rejected.is_empty(), "rejected {:?}", r.rejected);
+    fs::write(w.wt.join("notes.txt"), "wip").unwrap();
+    let report = w.execute(&r);
+    assert_eq!(report.results[0].outcome, Outcome::Skipped);
+    let reason = report.results[0].reason.clone().unwrap();
+    assert!(reason.contains("uncommitted"), "{reason}");
+    assert!(w.wt.join("notes.txt").exists());
+}
+
+#[test]
+fn rebuilt_worktree_is_skipped_as_changed() {
+    let w = merged_worktree();
+    let r = w.propose(&w.wt);
+    assert!(r.rejected.is_empty(), "rejected {:?}", r.rejected);
+    write(&w.wt.join("target/debug/app"), 20_000);
+    let report = w.execute(&r);
+    assert_eq!(report.results[0].outcome, Outcome::Skipped);
+    let reason = report.results[0].reason.clone().unwrap();
+    assert!(reason.contains("changed since it was indexed"), "{reason}");
+    assert!(w.wt.exists());
+}
+
+#[test]
+fn path_inside_a_worktree_is_refused() {
+    let w = merged_worktree();
+    assert_eq!(
+        w.rejection(&w.wt.join("src")),
+        "is inside a git worktree; clean the whole worktree instead"
+    );
+}
+
+#[test]
+fn main_checkout_is_never_proposable() {
+    let w = merged_worktree();
+    let reason = w.rejection(&w.repo);
+    assert!(reason.starts_with("contains a .git directory"), "{reason}");
+}
+
+#[test]
+fn ignored_secrets_block_removal_but_claimed_build_output_does_not() {
+    let w = merged_worktree();
+    fs::write(w.wt.join(".gitignore"), "target/\n.env\n").unwrap();
+    common::git(&w.wt, &["commit", "-qam", "ignore env"]);
+    common::git(&w.repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
+    fs::write(w.wt.join(".env"), "SECRET=1").unwrap();
+    let reason = w.rejection(&w.wt);
+    assert!(reason.contains("such as .env"), "{reason}");
+}
+
+#[test]
+fn ignored_files_a_review_rule_claims_still_block_removal() {
+    let w = merged_worktree_with("*.zip\n", |wt| write(&wt.join("backup.zip"), 500));
+    let reason = w.rejection(&w.wt);
+    assert!(reason.contains("such as backup.zip"), "{reason}");
+}

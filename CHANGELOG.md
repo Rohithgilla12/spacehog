@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Git worktree cleanup
+
+- A `git-worktree` rule claims linked worktrees (a `.git` file pointing into a repository's `worktrees/`). Cleanup removes one only when it has no uncommitted or untracked changes and its HEAD is merged into the default branch, by ancestry or by `git merge-tree` showing the merge would change nothing. Local git only; the no-network test covers it. Undo restores a working checkout.
+- Proposals count a claim's whole subtree, so a fallback claim such as `Downloads` reports what trashing it actually frees.
+
 ### M5–M7 TUI: Cleanup, Treemap, Categories, Changes, and polish
 
 - Cleanup view with a Queue tab and a Proposals tab. Each item shows its size, bucket, safety class, regen hint, and why it is safe. `enter` approves an agent's proposal, `x` rejects it with a reason the agent reads back, `D` cleans now, `m` switches between Trash and permanent, and `u` undoes the last cleanup.

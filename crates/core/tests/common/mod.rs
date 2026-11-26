@@ -122,3 +122,51 @@ pub fn scan(h: &Path, state: &Path) -> (Index, Arc<RuleSet>, i64) {
     let rec = run_scan(&req, Arc::new(Progress::default())).unwrap();
     (Index::open(&req.db).unwrap(), rules, rec.id)
 }
+
+/// Runs git with a fixed identity and no signing, panicking on failure.
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("spawn git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A repo at `root/repo` with one commit and a linked worktree on branch `wt-<name>`.
+pub fn repo_with_worktree(root: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let wt = repo.join(".claude/worktrees").join(name);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &format!("wt-{name}"),
+            wt.to_str().unwrap(),
+        ],
+    );
+    (repo, wt)
+}

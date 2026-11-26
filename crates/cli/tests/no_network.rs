@@ -41,6 +41,7 @@ fn every_command_works_with_the_network_denied() {
         vec![b'x'; 4096],
     )
     .unwrap();
+    let worktree = merged_worktree(tree.path());
     let data = tempfile::tempdir().unwrap();
     let root = tree.path().to_str().unwrap();
 
@@ -63,6 +64,55 @@ fn every_command_works_with_the_network_denied() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    let clean = ["clean", "--category", "worktree", "--dry-run", "--json"];
+    let out = run(&clean, data.path()).unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains(worktree.to_str().unwrap()),
+        "the worktree gate did not pass with the network denied: {stdout} {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("spawn git")
+        .success();
+    assert!(ok, "git {args:?} failed");
+}
+
+/// A repo under `root` with a linked worktree whose branch is merged into main.
+fn merged_worktree(root: &Path) -> std::path::PathBuf {
+    let root = std::fs::canonicalize(root).unwrap();
+    let repo = root.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let wt = repo.join(".claude/worktrees/x");
+    git(
+        &repo,
+        &["worktree", "add", "-q", "-b", "wt-x", wt.to_str().unwrap()],
+    );
+    std::fs::write(wt.join("a.txt"), vec![b'a'; 4096]).unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-qm", "work"]);
+    git(&repo, &["merge", "-q", "--no-ff", "-m", "merge", "wt-x"]);
+    wt
 }
 
 #[test]

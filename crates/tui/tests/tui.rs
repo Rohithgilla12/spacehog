@@ -1383,3 +1383,20 @@ fn a_run_streams_only_its_own_journal_rows() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[test]
+fn the_cleanup_queue_counts_a_folder_with_everything_inside_it() {
+    let fx = fixture();
+    let mut app = fx.scanned_app();
+    press(&mut app, KeyCode::Char('2'));
+    explorer_select(&mut app, "Downloads");
+    press(&mut app, KeyCode::Char('d'));
+    app.cleanup.load_queue(&app.ctx, &app.queue).unwrap();
+    let downloads = app
+        .ctx
+        .index
+        .find_in_latest(&fx.home.join("Downloads"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(app.cleanup.queue[0].size, downloads.disk_size);
+}
