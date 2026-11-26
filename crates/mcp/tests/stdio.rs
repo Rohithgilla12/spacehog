@@ -209,7 +209,10 @@ fn stdio_session() {
     assert_eq!(items[0]["bucket"], "dev-caches");
     assert_eq!(items[0]["rule_id"], "node-modules");
     assert!(items[0]["stale_days"].as_i64().unwrap() >= 199);
-    assert_eq!(items[0]["size_human"], "4.1 kB");
+    assert_eq!(
+        items[0]["size_human"],
+        spacehog_core::human::bytes(disk_usage(&stale))
+    );
 
     let explained = s.call("explain", json!({ "path": stale }));
     assert_eq!(explained["item"]["rule_id"], "node-modules");
@@ -316,4 +319,18 @@ fn stdio_session() {
     let log = std::fs::read_to_string(logs.path().join("mcp.log")).unwrap();
     assert!(log.contains("serving on stdio"), "{log}");
     assert!(log.contains("tool=\"propose_cleanup\""), "{log}");
+}
+
+/// Bytes on disk under `p`, folders included: Linux charges each one a block, APFS does not.
+fn disk_usage(p: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(p).unwrap();
+    let own = meta.blocks() * 512;
+    if !meta.is_dir() {
+        return own;
+    }
+    own + std::fs::read_dir(p)
+        .unwrap()
+        .map(|e| disk_usage(&e.unwrap().path()))
+        .sum::<u64>()
 }
