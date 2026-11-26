@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Releases
+
+- Tagging `vX.Y.Z` builds macOS (arm64, x86_64) and Linux (x86_64, arm64) binaries with dist, publishes a GitHub release with a shell installer, and pushes a formula to the `Rohithgilla12/homebrew-tap` tap. The hand-written source formula is gone.
+- The MCP stdio test computes the expected size from the fixture, so it passes on Linux, where every folder takes a block on disk.
+
 ### Git worktree cleanup
 
 - A `git-worktree` rule claims linked worktrees (a `.git` file pointing into a repository's `worktrees/`). Cleanup removes one only when it has no uncommitted or untracked changes and its HEAD is merged into the default branch, by ancestry or by `git merge-tree` showing the merge would change nothing. Local git only; the no-network test covers it. Undo restores a working checkout.
