@@ -21,9 +21,9 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-spacehog-core = { version = "0.1.0", path = "../core" }
-spacehog-mcp = { version = "0.1.0", path = "../mcp" }
-spacehog-tui = { version = "0.1.0", path = "../tui" }
+spacehog-core = { path = "../core" }
+spacehog-mcp = { path = "../mcp" }
+spacehog-tui = { path = "../tui" }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-subscriber = "0.3.23"
